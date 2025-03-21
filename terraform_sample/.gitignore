@@ -1,0 +1,47 @@
+# Terraformの一時ファイルとディレクトリ
+.terraform/
+.terraform.lock.hcl
+
+# 状態ファイル
+*.tfstate
+*.tfstate.*
+*.tfplan
+
+# 変数ファイル（シークレットを含む可能性があるため）
+*.tfvars
+*.tfvars.json
+
+# バックエンド設定ファイル（シークレットを含む可能性があるため）
+*backend.conf
+
+# オーバーライドファイル
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Terraformの設定ファイル
+.terraformrc
+terraform.rc
+
+# クラッシュログ
+crash.log
+crash.*.log
+
+# バックアップファイル
+*.bak
+
+# 実行計画ファイル
+tfplan
+*.tfplan
+
+# 環境変数ファイル
+.env
+.envrc
+
+# エディタの一時ファイル
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

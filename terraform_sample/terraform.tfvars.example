@@ -1,0 +1,26 @@
+# リソースグループ設定
+resource_group_name = "rg-machinelog-dev"
+location            = "japaneast"
+environment         = "dev"  # dev, test, prod のいずれか
+
+# Log Analytics設定
+log_analytics_sku      = "PerGB2018"  # PerGB2018, Free, PerNode, Premium, Standard, Standalone, Unlimited, CapacityReservation
+log_retention_in_days  = 30  # 30-730日
+
+# ストレージアカウント設定
+storage_account_tier     = "Standard"  # Standard, Premium
+storage_replication_type = "LRS"  # LRS, GRS, RAGRS, ZRS
+
+# App Service設定
+app_service_plan_sku = "B1"  # F1, D1, B1, B2, B3, S1, S2, S3, P1v2, P2v2, P3v2
+
+# アラート設定
+alert_email_address = "admin@example.com"
+
+# タグ設定
+tags = {
+  Environment = "Development"
+  Project     = "MachineLog"
+  Owner       = "DevOps Team"
+  CostCenter  = "IT-12345"
+}
