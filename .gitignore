@@ -1,0 +1,230 @@
+# IoT Hub デモプロジェクト用 .gitignore ファイル
+
+## OS固有の一時ファイル
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msm
+*.msp
+*.lnk
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+## .NET/C#関連
+# ビルド結果
+bin/
+obj/
+
+# NuGet
+*.nupkg
+# NuGetパッケージのフォルダ（packages.configを使用する場合）
+**/packages/*
+# NuGetパッケージのフォルダ（PackageReferenceを使用する場合）
+*.nuget.props
+*.nuget.targets
+
+# MSTest結果
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+
+# NUNIT
+*.VisualState.xml
+TestResult.xml
+nunit-*.xml
+
+# ビルドの結果
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# Visual Studioの.NET Core向け設定
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# ASP.NET Scaffolding
+ScaffoldingReadMe.txt
+
+# .NET Core
+.build/
+.publish/
+
+## IDE/エディタ関連
+# Visual Studio
+.vs/
+*.userosscache
+*.suo
+*.user
+*.userprefs
+*.dbmdl
+*.dbproj.schemaview
+*.jfm
+*.pfx
+*.publishsettings
+orleans.codegen.cs
+.vs/config/applicationhost.config
+
+# Visual Studio Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+.history/
+
+# JetBrains IDEs (Rider)
+.idea/
+*.sln.iml
+.idea_modules/
+*.iws
+
+## Azure関連
+# Azure Web App発行設定ファイル
+*.pubxml
+*.publishproj
+
+# Azure Webapp設定ファイル
+appsettings.*.json
+!appsettings.example.json
+!appsettings.template.json
+
+# Azure Functions ローカル設定
+local.settings.json
+!local.settings.example.json
+
+## Terraform関連
+# Terraformの一時ファイルとディレクトリ
+.terraform/
+.terraform.lock.hcl
+
+# 状態ファイル
+*.tfstate
+*.tfstate.*
+*.tfplan
+
+# 変数ファイル（シークレットを含む可能性があるため）
+*.tfvars
+*.tfvars.json
+
+# バックエンド設定ファイル（シークレットを含む可能性があるため）
+*backend.conf
+
+# オーバーライドファイル
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Terraformの設定ファイル
+.terraformrc
+terraform.rc
+
+# クラッシュログ
+crash.log
+crash.*.log
+
+## フロントエンド関連
+# npm
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Blazor WebAssembly
+_framework/
+wasm-output/
+wwwroot/dist/
+wwwroot/js/
+dist/
+
+# フロントエンドビルド出力
+*.min.css
+*.min.js
+
+# ビルドツール
+.rollup.cache/
+.parcel-cache/
+
+## テスト関連
+# テスト結果
+TestResults/
+coverlet.json
+coverage.json
+
+# カバレッジレポート
+coverage/
+*.opencover.xml
+*.cobertura.xml
+
+## シークレット/設定関連
+# 環境変数ファイル
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.envrc
+
+# ユーザー固有のアプリケーション設定
+*.Development.json
+*.Local.json
+**/Properties/launchSettings.json
+
+# シークレット
+secrets.json
+**/secrets/
+
+## Docker関連
+# Docker Compose 設定オーバーライド
+docker-compose.override.yml
+
+# .dockerignoreファイル
+.dockerignore
+
+## その他
+# バックアップファイル
+*.bak
+*.[Bb]ak
+*.swp
+*.swo
+
+# 一時ファイル
+[Tt]emp/
+*.tmp
+*.log
+*.vspscc
