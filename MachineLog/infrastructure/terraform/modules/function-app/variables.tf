@@ -95,7 +95,6 @@ variable "client_id" {
 variable "subnet_id" {
   description = "Function Appを統合するサブネットのID"
   type        = string
-  default     = null
 }
 
 variable "tags" {
