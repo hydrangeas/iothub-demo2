@@ -85,6 +85,7 @@ resource "azurerm_resource_group" "this" {
 # ネットワークモジュールの呼び出し
 module "networking" {
   source = "./modules/networking"
+  count  = var.deploy_virtual_network ? 1 : 0
 
   resource_group_name = azurerm_resource_group.this.name
   location            = var.location
@@ -123,9 +124,9 @@ module "storage" {
   enable_network_rules           = var.environment == "prod" ? true : false
   tags                           = var.tags
 }
-
 # IoT Hubモジュールの呼び出し
-module "iot_hub" {
+module "iot_hub" {し
+  source = "./modules/iot-hub"
   source = "./modules/iot-hub"
 
   resource_group_name        = azurerm_resource_group.this.name
@@ -306,7 +307,7 @@ variable "storage_replication_type" {
 variable "iot_hub_sku" {
   description = "IoT HubのSKU"
   type        = string
-  default     = "S1"
+  default     = "S1"  # PoCではF1(無料)を使用
   validation {
     condition     = contains(["F1", "S1", "S2", "S3"], var.iot_hub_sku)
     error_message = "IoT HubのSKUは「F1」、「S1」、「S2」、または「S3」のいずれかである必要があります。"
@@ -316,7 +317,7 @@ variable "iot_hub_sku" {
 variable "iot_hub_capacity" {
   description = "IoT Hubのユニット数"
   type        = number
-  default     = 1
+  default     = 1  # 最小数の1に設定
   validation {
     condition     = var.iot_hub_capacity >= 1 && var.iot_hub_capacity <= 10
     error_message = "IoT Hubのユニット数は1から10の間である必要があります。"
@@ -399,6 +400,12 @@ variable "subscription_id" {
   description = "Azure サブスクリプションID"
   type        = string
   default     = ""
+}
+
+variable "deploy_virtual_network" {
+  description = "仮想ネットワークをデプロイするかどうか"
+  type        = bool
+  default     = true
 }
 ```
 
@@ -623,7 +630,7 @@ resource "azurerm_cosmosdb_account" "this" {
   kind                = "GlobalDocumentDB"
 
   consistency_policy {
-    consistency_level = var.cosmos_db_consistency
+    consistency_level = "Session"  # 簡素化した一貫性レベル
   }
 
   geo_location {
@@ -631,32 +638,22 @@ resource "azurerm_cosmosdb_account" "this" {
     failover_priority = 0
   }
 
-  geo_location {
-    location          = var.cosmos_db_failover_location
-    failover_priority = 1
-  }
+  # PoCでは直近のフェイルオーバー設定を削除
 
   capabilities {
-    name = "EnableServerless"
+    name = "EnableServerless"  # PoCではサーバーレスに設定
   }
 
   capabilities {
     name = "EnableAggregationPipeline"
   }
 
-  capabilities {
-    name = "MongoEnableDocLevelTTL"
-  }
-
+  # PoCにおける最小リソース設定
+  
   tags = var.tags
 }
 
-resource "azurerm_cosmosdb_sql_database" "this" {
-  name                = "machineLogDB"
-  resource_group_name = var.resource_group_name
-  account_name        = azurerm_cosmosdb_account.this.name
-}
-
+# 必要最小限のコンテナ定義に簡素化
 resource "azurerm_cosmosdb_sql_container" "logEntries" {
   name                = "logEntries"
   resource_group_name = var.resource_group_name
@@ -676,41 +673,8 @@ resource "azurerm_cosmosdb_sql_container" "logEntries" {
     }
   }
 
-  default_ttl = 7776000  # 90日 (60*60*24*90)
-}
-
-resource "azurerm_cosmosdb_sql_container" "alertRules" {
-  name                = "alertRules"
-  resource_group_name = var.resource_group_name
-  account_name        = azurerm_cosmosdb_account.this.name
-  database_name       = azurerm_cosmosdb_sql_database.this.name
-  partition_key_path  = "/ruleId"
-}
-
-resource "azurerm_cosmosdb_sql_container" "alertHistory" {
-  name                = "alertHistory"
-  resource_group_name = var.resource_group_name
-  account_name        = azurerm_cosmosdb_account.this.name
-  database_name       = azurerm_cosmosdb_sql_database.this.name
-  partition_key_path  = "/machineId"
-  
-  default_ttl = 2592000  # 30日 (60*60*24*30)
-}
-
-resource "azurerm_cosmosdb_sql_container" "reportDefinitions" {
-  name                = "reportDefinitions"
-  resource_group_name = var.resource_group_name
-  account_name        = azurerm_cosmosdb_account.this.name
-  database_name       = azurerm_cosmosdb_sql_database.this.name
-  partition_key_path  = "/reportId"
-}
-
-resource "azurerm_cosmosdb_sql_container" "userPreferences" {
-  name                = "userPreferences"
-  resource_group_name = var.resource_group_name
-  account_name        = azurerm_cosmosdb_account.this.name
-  database_name       = azurerm_cosmosdb_sql_database.this.name
-  partition_key_path  = "/userId"
+  # PoCでは短い保持期間に設定
+  default_ttl = 1209600  # 14日 (60*60*24*14)
 }
 
 # 診断設定
@@ -767,10 +731,10 @@ resource "azurerm_windows_function_app" "this" {
     application_insights_key               = var.application_insights_key
   }
 
-  app_settings = {
-    "WEBSITE_RUN_FROM_PACKAGE"         = "1"
-    "AzureWebJobsDisableHomepage"      = "true"
-    "FUNCTIONS_WORKER_RUNTIME"         = "dotnet"
+    "LogAnalytics__WorkspaceId"        = var.log_analytics_workspace_id
+    "AzureAd__TenantId"                = var.tenant_id
+    "AzureAd__ClientId"                = var.client_id
+  } "FUNCTIONS_WORKER_RUNTIME"         = "dotnet"
     "AzureWebJobsStorage"              = "DefaultEndpointsProtocol=https;AccountName=${var.storage_account_name};AccountKey=${var.storage_account_access_key};EndpointSuffix=core.windows.net"
     "CosmosDB_ConnectionString"        = var.cosmos_db_connection_string
     "IoTHub_ConnectionString"          = var.iot_hub_connection_string
@@ -1040,7 +1004,7 @@ module "machinelog" {
   environment                  = "dev"
   resource_group_name          = "rg-machinelog-dev"
   location                     = "japaneast"
-  
+  use_consumption_plan         = true   # 開発環境ではFunction AppにConsumptionプランを使用
   # 開発環境固有の設定
   storage_replication_type     = "LRS"  # 開発環境では冗長性を下げてコスト削減
   iot_hub_sku                  = "S1"
@@ -1059,7 +1023,41 @@ module "machinelog" {
 }
 ```
 
-### 6.2 本番環境 (prod)
+### 6.2 テスト環境 (test)
+
+```hcl
+# environments/test/main.tf
+
+terraform {
+  backend "azurerm" {}
+}
+
+module "machinelog" {
+  source = "../../"
+
+  environment                  = "test"
+  resource_group_name          = "rg-machinelog-test"
+  location                     = "japaneast"
+  use_consumption_plan         = false  # テスト環境では実際の構成をテスト
+  # テスト環境固有の設定
+  log_retention_in_days        = 60     # テスト環境では中程度の保持期間
+  iot_hub_sku                  = "S1"
+  iot_hub_capacity             = 2      # テスト環境では開発より多く
+  cosmos_db_failover_location  = null   # テスト環境ではフェイルオーバー設定なし
+  app_service_plan_sku         = "P1v2"
+  use_consumption_plan         = false  # テスト環境では実際の構成をテスト
+  
+  log_retention_in_days        = 60     # テスト環境では中程度の保持期間
+  
+  tags = {
+    Environment = "Test"
+    Project     = "MachineLog"
+    Owner       = "QATeam"
+  }
+}
+```
+
+### 6.3 本番環境 (prod)
 
 ```hcl
 # environments/prod/main.tf
@@ -1074,197 +1072,270 @@ module "machinelog" {
   environment                  = "prod"
   resource_group_name          = "rg-machinelog-prod"
   location                     = "japaneast"
-  
+  use_consumption_plan         = false  # 本番環境ではFunction AppにApp Service Planを使用
   # 本番環境固有の設定
   storage_replication_type     = "GRS"  # 本番環境ではGRSで地理冗長性を確保
   iot_hub_sku                  = "S1"
   iot_hub_capacity             = 4      # 本番環境ではスケールアップ
   cosmos_db_failover_location  = "japanwest"
   app_service_plan_sku         = "P2v2" # 本番環境ではより高性能なPlan
-  use_consumption_plan         = false  # 本番環境ではFunction AppにApp Service Planを使用
+  subnet_names                 = ["app-subnet", "function-subnet", "db-subnet"]用
   
   log_retention_in_days        = 365    # 本番環境では1年間保持
   
-  # ネットワーク設定
+    Project     = "MachineLog"
   address_space                = ["10.0.0.0/16"]
   subnet_prefixes              = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
   subnet_names                 = ["app-subnet", "function-subnet", "db-subnet"]
-
+  
   tags = {
     Environment = "Production"
     Project     = "MachineLog"
-    Owner       = "OpsTeam"
+    Owner       = "OpsTeam"  
     CostCenter  = "IT-12345"
   }
 }
 ```
 
-## 7. CI/CDパイプラインとの統合
+### 6.4 PoC環境 (proof of concept)
+
+```hcl
+# environments/poc/main.tf
+
+terraform {
+  backend "azurerm" {}
+}
+
+module "machinelog" {
+  source = "../../"
+
+  environment                  = "poc"
+  resource_group_name          = "rg-machinelog-poc"
+  app_service_plan_sku         = "B1"   # PoCではB1(ベーシック)に縮小
+  use_consumption_plan         = true   # サーバーレスで費用対効果を最大化
+  # PoCの低コスト設定
+  log_retention_in_days        = 14     # PoCでは短期間の保持ル冗長のみ
+  iot_hub_sku                  = "S1"   # 最小限のスタンダードプラン
+  # ネットワーク構成の最小化             = 1
+  cosmos_db_failover_location  = null   # PoCではフェイルオーバー設定を無効化
+  app_service_plan_sku         = "B1"   # PoCではB1(ベーシック)に縮小想ネットワークをデプロイしない
+  use_consumption_plan         = true   # サーバーレスで費用対効果を最大化
+  
+  log_retention_in_days        = 14     # PoCでは短期間の保持  Environment = "PoC"
+  t     = "MachineLog"
+  # 簡素化されたネットワーク構成eam"
+  enable_network_rules         = false  # PoCではネットワークルールを簡素化
+  address_space                = ["10.0.0.0/16"]
+  subnet_prefixes              = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+  subnet_names                 = ["app-subnet", "function-subnet", "db-subnet"]
+  7. CI/CDパイプラインとの統合
+  tags = {
+    Environment = "PoC"sパイプラインと統合するためのYAMLファイル例：
+    Project     = "MachineLog"
+    Owner       = "DevTeam"
+  }# azure-pipelines.yml
+}
+```
+  branches:
+## 7. CI/CDパイプラインとの統合ude:
 
 TerraformをAzure DevOpsパイプラインと統合するためのYAMLファイル例：
-
-```yaml
+e:
+```yamlrraform-machinelog/**
 # azure-pipelines.yml
 
-trigger:
+trigger:  vmImage: 'ubuntu-latest'
   branches:
     include:
-    - main
-  paths:
+    - main  - group: terraform-secrets
+  paths:environment
     include:
-    - terraform-machinelog/**
+    - terraform-machinelog/**rsion
 
 pool:
   vmImage: 'ubuntu-latest'
-
+- stage: Validate
 variables:
-  - group: terraform-secrets
-  - name: environment
-    value: 'dev' # デフォルト環境
-  - name: terraformVersion
-    value: '1.3.9'
+  - group: terraform-secretsTerraform
+  - name: environmentps:
+    value: 'dev' # デフォルト環境ller@0
+  - name: terraformVersionts:
+    value: '1.3.9'aformVersion)
 
 stages:
-- stage: Validate
-  jobs:
+- stage: Validate  cd terraform-machinelog
+  jobs:rm init -backend=false
   - job: ValidateTerraform
-    steps:
+    steps:e'
     - task: TerraformInstaller@0
       inputs:
-        terraformVersion: $(terraformVersion)
-    
-    - script: |
-        cd terraform-machinelog
+        terraformVersion: $(terraformVersion)inputs:
+      
+    - script: |ngDirectory: 'terraform-machinelog'
+        cd terraform-machinelog: '-check -recursive'
         terraform init -backend=false
         terraform validate
       displayName: 'Terraform Validate'
-      
+        dependsOn: Validate
     - task: TerraformCLI@0
-      inputs:
-        command: 'fmt'
-        workingDirectory: 'terraform-machinelog'
-        commandOptions: '-check -recursive'
-      displayName: 'Terraform Format Check'
+      inputs:n
+        command: 'fmt'ps:
+        workingDirectory: 'terraform-machinelog'nstaller@0
+        commandOptions: '-check -recursive'ts:
+      displayName: 'Terraform Format Check'aformVersion)
 
 - stage: Plan
-  dependsOn: Validate
+  dependsOn: Validate  inputs:
   jobs:
-  - job: TerraformPlan
-    steps:
+  - job: TerraformPlanngDirectory: 'terraform-machinelog/environments/$(environment)'
+    steps:zurerm'
     - task: TerraformInstaller@0
-      inputs:
-        terraformVersion: $(terraformVersion)
+      inputs:GroupName: 'rg-terraform-state'
+        terraformVersion: $(terraformVersion)tate$(environment)'
     
     - task: TerraformCLI@0
       inputs:
         command: 'init'
         workingDirectory: 'terraform-machinelog/environments/$(environment)'
-        backendType: 'azurerm'
+        backendType: 'azurerm'inputs:
         backendServiceArm: 'TerraformServiceConnection'
-        backendAzureRmResourceGroupName: 'rg-terraform-state'
-        backendAzureRmStorageAccountName: 'stterraformstate$(environment)'
+        backendAzureRmResourceGroupName: 'rg-terraform-state'ngDirectory: 'terraform-machinelog/environments/$(environment)'
+        backendAzureRmStorageAccountName: 'stterraformstate$(environment)'iceName: 'TerraformServiceConnection'
         backendAzureRmContainerName: 'tfstate'
         backendAzureRmKey: 'machinelog.$(environment).tfstate'
       displayName: 'Terraform Init'
-    
-    - task: TerraformCLI@0
+      ingDirectory)/terraform-machinelog/environments/$(environment)/tfplan
+    - task: TerraformCLI@0  artifact: tfplan
       inputs:
         command: 'plan'
         workingDirectory: 'terraform-machinelog/environments/$(environment)'
-        environmentServiceName: 'TerraformServiceConnection'
-        commandOptions: '-var-file=terraform.tfvars -out=tfplan'
+        environmentServiceName: 'TerraformServiceConnection'  dependsOn: Plan
+        commandOptions: '-var-file=terraform.tfvars -out=tfplan'ucceeded()
       displayName: 'Terraform Plan'
-    
-    - publish: $(System.DefaultWorkingDirectory)/terraform-machinelog/environments/$(environment)/tfplan
+    rraform
+    - publish: $(System.DefaultWorkingDirectory)/terraform-machinelog/environments/$(environment)/tfplanironment: $(environment)
       artifact: tfplan
       displayName: 'Publish Terraform Plan'
-
-- stage: Apply
-  dependsOn: Plan
-  condition: succeeded()
-  jobs:
+y:
+- stage: Applys:
+  dependsOn: Plank: TerraformInstaller@0
+  condition: succeeded()ts:
+  jobs:aformVersion)
   - deployment: DeployTerraform
     environment: $(environment)
-    strategy:
-      runOnce:
+    strategy:  artifact: tfplan
+      runOnce:nload Terraform Plan'
         deploy:
           steps:
-          - task: TerraformInstaller@0
+          - task: TerraformInstaller@0  inputs:
             inputs:
-              terraformVersion: $(terraformVersion)
-          
+              terraformVersion: $(terraformVersion)ngDirectory: 'terraform-machinelog/environments/$(environment)'
+          zurerm'
           - download: current
-            artifact: tfplan
-            displayName: 'Download Terraform Plan'
+            artifact: tfplanGroupName: 'rg-terraform-state'
+            displayName: 'Download Terraform Plan'tate$(environment)'
           
           - task: TerraformCLI@0
             inputs:
               command: 'init'
               workingDirectory: 'terraform-machinelog/environments/$(environment)'
-              backendType: 'azurerm'
+              backendType: 'azurerm'  inputs:
               backendServiceArm: 'TerraformServiceConnection'
-              backendAzureRmResourceGroupName: 'rg-terraform-state'
-              backendAzureRmStorageAccountName: 'stterraformstate$(environment)'
+              backendAzureRmResourceGroupName: 'rg-terraform-state'ngDirectory: 'terraform-machinelog/environments/$(environment)'
+              backendAzureRmStorageAccountName: 'stterraformstate$(environment)'ceName: 'TerraformServiceConnection'
               backendAzureRmContainerName: 'tfstate'
               backendAzureRmKey: 'machinelog.$(environment).tfstate'
             displayName: 'Terraform Init'
           
-          - task: TerraformCLI@0
+          - task: TerraformCLI@08. セキュリティと運用のベストプラクティス
             inputs:
               command: 'apply'
               workingDirectory: 'terraform-machinelog/environments/$(environment)'
-              environmentServiceName: 'TerraformServiceConnection'
-              commandOptions: '$(Pipeline.Workspace)/tfplan'
+              environmentServiceName: 'TerraformServiceConnection'ットは必ずAzure Key VaultまたはAzure DevOps変数グループで管理
+              commandOptions: '$(Pipeline.Workspace)/tfplan'- `terraform.tfvars`ファイルはGitリポジトリには保存せず、`terraform.tfvars.example`をテンプレートとして提供
             displayName: 'Terraform Apply'
 ```
 
 ## 8. セキュリティと運用のベストプラクティス
-
-### 8.1 シークレット管理
+ファイルは専用のAzure Storage Accountで管理
+### 8.1 シークレット管理- 環境ごとに異なるステートファイルを使用し、アクセス制御を適用
 
 - Terraformのシークレットは必ずAzure Key VaultまたはAzure DevOps変数グループで管理
 - `terraform.tfvars`ファイルはGitリポジトリには保存せず、`terraform.tfvars.example`をテンプレートとして提供
 - バックエンド設定も同様に`backend.conf.example`として提供
 
-### 8.2 ステート管理
-
+### 8.2 ステート管理 Requestを通して承認
+- 本番環境の変更は手動承認ステップを含める
 - Terraformの状態ファイルは専用のAzure Storage Accountで管理
 - 環境ごとに異なるステートファイルを使用し、アクセス制御を適用
-- ステート用ストレージアカウントに対する厳格なアクセス制御
+- ステート用ストレージアカウントに対する厳格なアクセス制御クフロー）
+- 状態ロックの使用によるチーム作業の調整
 
 ### 8.3 運用管理
-
-- 変更はすべてPull Requestを通して承認
-- 本番環境の変更は手動承認ステップを含める
+スキャンでインフラストラクチャのドリフトを検出
+- 変更はすべてPull Requestを通して承認- 自動または手動の修復プロセスを定義
+- 本番環境の変更は手動承認ステップを含めるを早期に検出
 - テラフォームプランの詳細なレビュー
 - すべての変更を監査ログとして保存
+- 計画と適用の分離（GitOpsワークフロー）
 
-### 8.4 ドリフト検出
+### 8.4 ドリフト検出業機器ログ分析システム_実装計画.md」で定義された以下の要件と整合しています：
 
 - 定期的なコンプライアンススキャンでインフラストラクチャのドリフトを検出
-- 自動または手動の修復プロセスを定義
-- CI/CDの一部として定期的なTerraform計画を実行し、ドリフトを早期に検出
+- 自動または手動の修復プロセスを定義   - PoC環境用の低コスト設計
+- CI/CDの一部として定期的なTerraform計画を実行し、ドリフトを早期に検出段階的展開計画
+- インフラ状態の定期監査と報告
 
-## 9. 推奨事項とベストプラクティス
+## 9. 実装計画との整合性   - 初期段階ではインフラ基盤構築を優先
+スからスタートし徐々に拡張
+本Terraform設計は「産業機器ログ分析システム_実装計画.md」で定義された以下の要件と整合しています：
+
+1. **フェーズ別デプロイ**:   - Azure DevOpsとの統合
+   - PoC環境用の低コスト設計
+   - 開発・テスト・本番環境の段階的展開計画
+
+2. **優先順位付け**:   - インフラ基盤構築タスクと同期
+   - 初期段階ではインフラ基盤構築を優先アの責任範囲明確化
+   - 必要最小限のリソースからスタートし徐々に拡張
+
+3. **CI/CDパイプライン**:   - 低コスト構成から本番移行時の構成変更複雑化に対応
+   - Azure DevOpsとの統合象化とモジュール化
+   - 環境ごとの自動デプロイメント
+
+4. **スプリント計画**:
+   - インフラ基盤構築タスクと同期
+   - DevOpsエンジニアの責任範囲明確化   - すべての主要リソースをモジュール化し、再利用性を高める
+て機能するように設計
+5. **リスク管理**:
+   - 低コスト構成から本番移行時の構成変更複雑化に対応
+   - インフラ構成の抽象化とモジュール化
+   - 一貫した命名規則を使用（例：リソース種別-プロジェクト名-環境）
+## 10. 推奨事項とベストプラクティスたリソース分類と属性管理
 
 1. **モジュール設計**
    - すべての主要リソースをモジュール化し、再利用性を高める
-   - モジュールは独立して機能するように設計
-   - 環境間でコードを再利用し、環境ごとのパラメータのみ変更
+   - モジュールは独立して機能するように設計   - Terraformとプロバイダーのバージョンを固定
+   - インターフェースを明確に定義し、バージョニングを管理アップデートのスケジュール設定
 
 2. **命名規則**
    - 一貫した命名規則を使用（例：リソース種別-プロジェクト名-環境）
-   - タグを使用したリソース分類と属性管理
+   - タグを使用したリソース分類と属性管理   - 自動スケーリング設定による効率的なリソース使用
+   - リソース名の最大長を考慮した略称の一貫した適用コスト分析とアラート設定
 
-3. **バージョン管理**
+3. **バージョン管理**ブと削除
    - Terraformとプロバイダーのバージョンを固定
    - 定期的なバージョンアップデートのスケジュール設定
-
+   - バージョンアップグレードの影響評価プロセスの確立   - 段階的デプロイによるリスク低減
+囲の事前評価
 4. **運用効率**
    - 自動スケーリング設定による効率的なリソース使用
    - タグベースのコスト分析とアラート設定
    - 開発環境では不要な時間帯のリソース削減を自動化
+本文書では、産業機器ログ収集・分析プラットフォーム（MachineLog）のインフラストラクチャをTerraformで実装するための詳細な設計を提供しました。この設計に従うことで、複数環境にわたる一貫したインフラストラクチャのデプロイが可能になります。また、セキュリティ、可用性、コスト最適化を考慮した構成となっており、実装計画と整合した形で環境を段階的に拡張できます。イフサイクル管理による自動アーカイブと削除
+   - 段階的デプロイによるリスク低減
+   - 変更の影響範囲の事前評価
+   - ロールバック戦略の事前定義
 
 ## まとめ
 
-本文書では、産業機器ログ収集・分析プラットフォーム（MachineLog）のインフラストラクチャをTerraformで実装するための詳細な設計を提供しました。この設計に従うことで、複数環境にわたる一貫したインフラストラクチャのデプロイが可能になります。また、セキュリティ、可用性、コスト最適化を考慮した構成となっており、将来の拡張にも対応できます。
+本文書では、産業機器ログ収集・分析プラットフォーム（MachineLog）のインフラストラクチャをTerraformで実装するための詳細な設計を提供しました。この設計に従うことで、複数環境にわたる一貫したインフラストラクチャのデプロイが可能になります。また、セキュリティ、可用性、コスト最適化を考慮した構成となっており、実装計画と整合した形で環境を段階的に拡張できます。

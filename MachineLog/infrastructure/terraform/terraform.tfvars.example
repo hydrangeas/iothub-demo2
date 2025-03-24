@@ -1,0 +1,56 @@
+# リソースグループ設定
+resource_group_name = "rg-machinelog-dev"
+location            = "japaneast"
+environment         = "dev"  # dev, test, prod のいずれか
+application_name    = "machinelog"
+
+# Log Analytics設定
+log_analytics_sku     = "PerGB2018"  # PerGB2018, Free, PerNode, Premium, Standard, Standalone, Unlimited, CapacityReservation
+log_retention_in_days = 30  # 30-730日
+
+# ストレージアカウント設定
+storage_account_tier     = "Standard"  # Standard, Premium
+storage_replication_type = "LRS"  # LRS, GRS, RAGRS, ZRS, GZRS, RAGZRS
+blob_soft_delete_retention_days = 7
+container_soft_delete_retention_days = 7
+
+# App Service設定
+app_service_plan_sku = "B1"  # F1, D1, B1, B2, B3, S1, S2, S3, P1v2, P2v2, P3v2
+
+# ネットワーク設定
+address_space    = ["10.0.0.0/16"]
+subnet_prefixes  = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+subnet_names     = ["app-subnet", "function-subnet", "db-subnet"]
+
+# IoT Hub設定
+iot_hub_sku      = "S1"  # F1, S1, S2, S3
+iot_hub_capacity = 1  # 1-10
+
+# Cosmos DB設定
+cosmos_db_offer_type        = "Standard"
+cosmos_db_consistency       = "Session"  # Eventual, Consistent, Session, BoundedStaleness, Strong
+cosmos_db_failover_location = "japanwest"
+
+# Function App設定
+use_consumption_plan = false
+
+# Front Door設定
+waf_enabled = true
+
+# アラート設定
+alert_email_address = "admin@example.com"
+
+# タグ設定
+tags = {
+  Environment = "Development"
+  Project     = "MachineLog"
+  Owner       = "DevOps Team"
+  CostCenter  = "IT-12345"
+  ManagedBy   = "Terraform"
+}
+
+# Azure認証設定（CI/CD環境で使用）
+# client_id       = ""
+# client_secret   = ""
+# tenant_id       = ""
+# subscription_id = ""

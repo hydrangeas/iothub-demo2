@@ -1,185 +1,189 @@
-# MachineLog インフラストラクチャ定義
-# 変数定義ファイル
-
-# 基本設定
-variable "project" {
-  description = "プロジェクト名"
-  type        = string
-  default     = "machinelog"
-}
-
-variable "environment" {
-  description = "環境名 (dev, test, prod)"
+variable "resource_group_name" {
+  description = "リソースグループの名前"
   type        = string
 }
 
 variable "location" {
-  description = "Azureリージョン"
+  description = "リソースのデプロイ先リージョン"
   type        = string
   default     = "japaneast"
 }
 
-variable "secondary_location" {
-  description = "セカンダリAzureリージョン（災害復旧用）"
+variable "environment" {
+  description = "環境（dev, test, prod）"
   type        = string
-  default     = "japanwest"
+  validation {
+    condition     = contains(["dev", "test", "prod"], var.environment)
+    error_message = "環境は「dev」、「test」、または「prod」のいずれかである必要があります。"
+  }
 }
 
-# タグ
-variable "tags" {
-  description = "リソースに適用するタグ"
-  type        = map(string)
-  default     = {}
-}
-
-# IoT Hub設定
-variable "iot_hub_sku" {
-  description = "IoT Hub SKU"
+variable "application_name" {
+  description = "アプリケーションの名前"
   type        = string
-  default     = "S1"
+  default     = "machinelog"
 }
 
-variable "iot_hub_capacity" {
-  description = "IoT Hub容量（ユニット数）"
+variable "log_analytics_sku" {
+  description = "Log Analyticsワークスペースのスキュー"
+  type        = string
+  default     = "PerGB2018"
+}
+
+variable "log_retention_in_days" {
+  description = "ログの保持期間（日数）"
   type        = number
-  default     = 1
+  default     = 30
+  validation {
+    condition     = var.log_retention_in_days >= 30 && var.log_retention_in_days <= 730
+    error_message = "ログの保持期間は30日から730日の間である必要があります。"
+  }
 }
 
-variable "iot_hub_partition_count" {
-  description = "IoT Hubパーティション数"
-  type        = number
-  default     = 4
+variable "storage_account_tier" {
+  description = "ストレージアカウントの階層"
+  type        = string
+  default     = "Standard"
+  validation {
+    condition     = contains(["Standard", "Premium"], var.storage_account_tier)
+    error_message = "ストレージアカウントの階層は「Standard」または「Premium」である必要があります。"
+  }
 }
 
-variable "iot_hub_retention_days" {
-  description = "IoT Hubメッセージ保持日数"
+variable "storage_replication_type" {
+  description = "ストレージアカウントのレプリケーションタイプ"
+  type        = string
+  default     = "LRS"
+  validation {
+    condition     = contains(["LRS", "GRS", "RAGRS", "ZRS", "GZRS", "RAGZRS"], var.storage_replication_type)
+    error_message = "ストレージアカウントのレプリケーションタイプは有効な値である必要があります。"
+  }
+}
+
+variable "blob_soft_delete_retention_days" {
+  description = "BLOBの論理削除保持期間（日数）"
   type        = number
   default     = 7
 }
 
-# ストレージ設定
-variable "storage_account_tier" {
-  description = "ストレージアカウント階層"
-  type        = string
-  default     = "Standard"
-}
-
-variable "storage_account_replication_type" {
-  description = "ストレージアカウントレプリケーションタイプ"
-  type        = string
-  default     = "GRS"
-}
-
-variable "storage_account_kind" {
-  description = "ストレージアカウント種類"
-  type        = string
-  default     = "StorageV2"
-}
-
-variable "storage_access_tier" {
-  description = "ストレージアクセス階層"
-  type        = string
-  default     = "Hot"
-}
-
-# App Service設定
-variable "app_service_sku_tier" {
-  description = "App Service SKU階層"
-  type        = string
-  default     = "PremiumV3"
-}
-
-variable "app_service_sku_size" {
-  description = "App Service SKUサイズ"
-  type        = string
-  default     = "P1v3"
-}
-
-variable "app_service_capacity" {
-  description = "App Service初期インスタンス数"
+variable "container_soft_delete_retention_days" {
+  description = "コンテナの論理削除保持期間（日数）"
   type        = number
-  default     = 2
+  default     = 7
 }
 
-variable "app_service_max_capacity" {
-  description = "App Service最大インスタンス数"
-  type        = number
-  default     = 10
-}
-
-# Key Vault設定
-variable "key_vault_sku" {
-  description = "Key Vault SKU"
+variable "app_service_plan_sku" {
+  description = "App Serviceプランのスキュー"
   type        = string
-  default     = "standard"
+  default     = "B1"
 }
 
-variable "key_vault_soft_delete_retention_days" {
-  description = "Key Vaultソフト削除保持日数"
-  type        = number
-  default     = 90
+variable "alert_email_address" {
+  description = "アラート通知を送信するメールアドレス"
+  type        = string
+  default     = "admin@example.com"
 }
 
-# 監視設定
-variable "log_analytics_retention_days" {
-  description = "Log Analytics保持日数"
-  type        = number
-  default     = 90
+variable "tags" {
+  description = "リソースに付与するタグ"
+  type        = map(string)
+  default     = {}
 }
 
-variable "app_insights_sampling_percentage" {
-  description = "Application Insightsサンプリング率（%）"
-  type        = number
-  default     = 10
-}
-
-# ネットワーク設定
-variable "vnet_address_space" {
-  description = "仮想ネットワークアドレス空間"
+# ネットワーク関連設定
+variable "address_space" {
+  description = "仮想ネットワークのアドレス空間"
   type        = list(string)
   default     = ["10.0.0.0/16"]
 }
 
-variable "subnet_app_service" {
-  description = "App Service用サブネット"
-  type        = string
-  default     = "10.0.1.0/24"
-}
-
-variable "subnet_database" {
-  description = "データベース用サブネット"
-  type        = string
-  default     = "10.0.2.0/24"
-}
-
-variable "subnet_integration" {
-  description = "統合用サブネット"
-  type        = string
-  default     = "10.0.3.0/24"
-}
-
-# セキュリティ設定
-variable "allowed_ip_ranges" {
-  description = "許可するIPアドレス範囲"
+variable "subnet_prefixes" {
+  description = "サブネットのアドレス空間"
   type        = list(string)
-  default     = []
+  default     = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
 }
 
-variable "enable_ddos_protection" {
-  description = "DDoS保護を有効にするかどうか"
+variable "subnet_names" {
+  description = "サブネット名"
+  type        = list(string)
+  default     = ["app-subnet", "function-subnet", "db-subnet"]
+}
+
+# IoT Hub関連設定
+variable "iot_hub_sku" {
+  description = "IoT HubのSKU"
+  type        = string
+  default     = "S1"
+  validation {
+    condition     = contains(["F1", "S1", "S2", "S3"], var.iot_hub_sku)
+    error_message = "IoT HubのSKUは「F1」、「S1」、「S2」、または「S3」のいずれかである必要があります。"
+  }
+}
+
+variable "iot_hub_capacity" {
+  description = "IoT Hubのユニット数"
+  type        = number
+  default     = 1
+  validation {
+    condition     = var.iot_hub_capacity >= 1 && var.iot_hub_capacity <= 10
+    error_message = "IoT Hubのユニット数は1から10の間である必要があります。"
+  }
+}
+
+# Cosmos DB関連設定
+variable "cosmos_db_offer_type" {
+  description = "Cosmos DBのオファータイプ"
+  type        = string
+  default     = "Standard"
+}
+
+variable "cosmos_db_consistency" {
+  description = "Cosmos DBの一貫性レベル"
+  type        = string
+  default     = "Session"
+  validation {
+    condition     = contains(["Eventual", "Consistent", "Session", "BoundedStaleness", "Strong"], var.cosmos_db_consistency)
+    error_message = "Cosmos DBの一貫性レベルは有効な値である必要があります。"
+  }
+}
+
+variable "cosmos_db_failover_location" {
+  description = "Cosmos DBフェイルオーバーのリージョン"
+  type        = string
+  default     = "japanwest"
+}
+
+# Function App関連設定
+variable "use_consumption_plan" {
+  description = "Function AppでConsumptionプランを使用するかどうか"
   type        = bool
-  default     = true
+  default     = false
 }
 
-# スケーリング設定
-variable "cpu_threshold_percentage" {
-  description = "CPUスケーリング閾値（%）"
-  type        = number
-  default     = 70
+# Front Door関連設定は最新のアーキテクチャ設計から削除されました
+
+# Azure認証関連設定
+variable "client_id" {
+  description = "Azure サービスプリンシパルのクライアントID"
+  type        = string
+  default     = ""
 }
 
-variable "memory_threshold_percentage" {
-  description = "メモリスケーリング閾値（%）"
-  type        = number
-  default     = 80
+variable "client_secret" {
+  description = "Azure サービスプリンシパルのクライアントシークレット"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "tenant_id" {
+  description = "Azure テナントID"
+  type        = string
+  default     = ""
+}
+
+variable "subscription_id" {
+  description = "Azure サブスクリプションID"
+  type        = string
+  default     = ""
 }
