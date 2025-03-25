@@ -9,15 +9,28 @@ public abstract class TestDataGenerator<T> where T : class
 {
   protected readonly Faker<T> Faker;
 
+  /// <summary>
+  /// テストの再現性を確保するための固定シード値
+  /// </summary>
+  private const int DefaultSeed = 12345;
+
   protected TestDataGenerator()
   {
-    // 一貫性のあるデータ生成のためにインスタンス固有のシードを使用
-    var random = new Random();
+    // テストの再現性を確保するために固定シードを使用
+    // 継承先でSeedプロパティをオーバーライドすることで、
+    // 特定のテストケースで異なるシードを使用することも可能
+    var random = new Random(Seed);
     Randomizer.Seed = random;
 
     Faker = new Faker<T>();
     ConfigureRules(Faker);
   }
+
+  /// <summary>
+  /// テストデータ生成に使用するシード値
+  /// デフォルトでは固定値を使用し、テストの再現性を確保
+  /// </summary>
+  protected virtual int Seed => DefaultSeed;
 
   /// <summary>
   /// Fakerのルールを設定
