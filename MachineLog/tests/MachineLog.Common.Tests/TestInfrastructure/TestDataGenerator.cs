@@ -11,8 +11,9 @@ public abstract class TestDataGenerator<T> where T : class
 
   protected TestDataGenerator()
   {
-    // 一貫性のあるデータ生成のためにシードを固定
-    Randomizer.Seed = new Random(8675309);
+    // 一貫性のあるデータ生成のためにインスタンス固有のシードを使用
+    var random = new Random();
+    Randomizer.Seed = random;
 
     Faker = new Faker<T>();
     ConfigureRules(Faker);
