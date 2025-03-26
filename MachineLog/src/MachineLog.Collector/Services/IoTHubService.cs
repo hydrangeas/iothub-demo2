@@ -10,7 +10,7 @@ namespace MachineLog.Collector.Services;
 /// <summary>
 /// IoT Hubサービスの実装
 /// </summary>
-public class IoTHubService : IIoTHubService
+public class IoTHubService : IIoTHubService, IDisposable
 {
   private readonly ILogger<IoTHubService> _logger;
   private readonly IoTHubConfig _config;
@@ -92,6 +92,7 @@ public class IoTHubService : IIoTHubService
 
       // 接続を閉じる
       await _deviceClient.CloseAsync(cancellationToken);
+      _deviceClient.Dispose();
       _deviceClient = null;
       _connectionState = ConnectionState.Disconnected;
 
@@ -220,5 +221,38 @@ public class IoTHubService : IIoTHubService
 
     // アップロードをシミュレート
     await Task.Delay(TimeSpan.FromMilliseconds(fileStream.Length / 1024), cancellationToken); // 1KBあたり1ミリ秒
+  }
+
+  /// <summary>
+  /// リソースを破棄します
+  /// </summary>
+  public void Dispose()
+  {
+    Dispose(true);
+    GC.SuppressFinalize(this);
+  }
+
+  /// <summary>
+  /// リソースを破棄します
+  /// </summary>
+  /// <param name="disposing">マネージドリソースを破棄するかどうか</param>
+  protected virtual void Dispose(bool disposing)
+  {
+    if (disposing)
+    {
+      // マネージドリソースの破棄
+      if (_deviceClient != null)
+      {
+        try
+        {
+          _deviceClient.Dispose();
+          _deviceClient = null;
+        }
+        catch (Exception ex)
+        {
+          _logger.LogError(ex, "DeviceClientの破棄中にエラーが発生しました");
+        }
+      }
+    }
   }
 }
