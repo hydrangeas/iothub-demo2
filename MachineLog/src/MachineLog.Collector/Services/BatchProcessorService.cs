@@ -100,7 +100,8 @@ public class BatchProcessorService : IBatchProcessorService
 
       // バッチをクリア
       result.ProcessedItems = _batchQueue.Count;
-      _batchQueue.Clear();
+      // ConcurrentQueueにはClear()メソッドがないため、ループでキューをクリア
+      while (_batchQueue.TryDequeue(out _)) { }
       Interlocked.Exchange(ref _currentBatchSizeBytes, 0);
     }
     catch (Exception ex)
