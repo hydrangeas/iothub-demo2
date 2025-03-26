@@ -1,4 +1,5 @@
 using MachineLog.Collector.Models;
+using MachineLog.Collector.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -40,7 +41,14 @@ public static class ServiceCollectionExtensions
   public static IServiceCollection AddCollectorServices(
     this IServiceCollection services)
   {
-    // TODO: 各種サービスの登録を実装
+    // ファイル監視サービスの登録
+    services.AddSingleton<IFileWatcherService, FileWatcherService>();
+
+    // ファイル処理サービスの登録
+    services.AddTransient<IFileProcessorService, FileProcessorService>();
+
+    // バリデーターの登録
+    services.AddTransient<FluentValidation.IValidator<MachineLog.Common.Models.LogEntry>, MachineLog.Common.Validation.LogEntryValidator>();
 
     return services;
   }
