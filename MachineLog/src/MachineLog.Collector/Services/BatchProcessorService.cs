@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Threading;
 
 namespace MachineLog.Collector.Services;
 
@@ -20,6 +21,7 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable
   private Task? _processingTask;
   private long _currentBatchSizeBytes;
   private bool _isProcessing;
+  private readonly SemaphoreSlim _processingLock = new SemaphoreSlim(1, 1);
 
   /// <summary>
   /// コンストラクタ
@@ -81,6 +83,9 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable
       BatchSizeBytes = _currentBatchSizeBytes
     };
 
+    // セマフォを使用して同時実行を防止
+    await _processingLock.WaitAsync(cancellationToken);
+
     var stopwatch = Stopwatch.StartNew();
 
     try
@@ -116,6 +121,9 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable
     {
       stopwatch.Stop();
       result.ProcessingTimeMs = stopwatch.ElapsedMilliseconds;
+
+      // セマフォを解放
+      _processingLock.Release();
     }
 
     return result;
@@ -264,6 +272,7 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable
     {
       // マネージドリソースの破棄
       _processingTokenSource.Dispose();
+      _processingLock.Dispose();
     }
   }
 }
