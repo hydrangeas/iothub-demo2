@@ -10,7 +10,7 @@ namespace MachineLog.Collector.Services;
 /// <summary>
 /// バッチ処理サービスの実装
 /// </summary>
-public class BatchProcessorService : IBatchProcessorService
+public class BatchProcessorService : IBatchProcessorService, IDisposable
 {
   private readonly ILogger<BatchProcessorService> _logger;
   private readonly BatchConfig _config;
@@ -242,5 +242,27 @@ public class BatchProcessorService : IBatchProcessorService
     size += 100; // その他のプロパティやオーバーヘッドの推定値
 
     return size;
+  }
+
+  /// <summary>
+  /// リソースを破棄します
+  /// </summary>
+  public void Dispose()
+  {
+    Dispose(true);
+    GC.SuppressFinalize(this);
+  }
+
+  /// <summary>
+  /// リソースを破棄します
+  /// </summary>
+  /// <param name="disposing">マネージドリソースを破棄するかどうか</param>
+  protected virtual void Dispose(bool disposing)
+  {
+    if (disposing)
+    {
+      // マネージドリソースの破棄
+      _processingTokenSource.Dispose();
+    }
   }
 }
