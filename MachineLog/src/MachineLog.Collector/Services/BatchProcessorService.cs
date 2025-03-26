@@ -99,6 +99,7 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable
       // 例: ファイルに書き出し、IoT Hubにアップロードなど
 
       // バッチをクリア
+      // キューをクリアする前にカウントを取得して、実際に処理されたバッチを正確に反映
       result.ProcessedItems = _batchQueue.Count;
       // ConcurrentQueueにはClear()メソッドがないため、ループでキューをクリア
       while (_batchQueue.TryDequeue(out _)) { }
