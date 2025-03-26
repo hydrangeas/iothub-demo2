@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace MachineLog.Collector.Models;
 
 /// <summary>
@@ -11,9 +13,24 @@ public class CollectorConfig
   public List<string> MonitoringPaths { get; set; } = new();
 
   /// <summary>
+  /// 監視対象ディレクトリの設定リスト
+  /// </summary>
+  public List<DirectoryWatcherConfig> DirectoryConfigs { get; set; } = new();
+
+  /// <summary>
   /// 監視対象のファイルフィルター（例: *.log, *.json）
   /// </summary>
   public string FileFilter { get; set; } = "*.jsonl";
+
+  /// <summary>
+  /// 監視対象のファイル拡張子のリスト
+  /// </summary>
+  public List<string> FileExtensions { get; set; } = new() { ".log", ".json", ".jsonl" };
+
+  /// <summary>
+  /// 最大監視ディレクトリ数
+  /// </summary>
+  public int MaxDirectories { get; set; } = 10;
 
   /// <summary>
   /// ファイル変更検出後の安定化待機時間（秒）

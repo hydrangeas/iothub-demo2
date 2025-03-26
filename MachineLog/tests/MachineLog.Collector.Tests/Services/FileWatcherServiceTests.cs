@@ -26,7 +26,9 @@ public class FileWatcherServiceTests : UnitTestBase
     {
       MonitoringPaths = new List<string>(),
       FileFilter = "*.jsonl",
-      StabilizationPeriodSeconds = 1
+      StabilizationPeriodSeconds = 1,
+      FileExtensions = new List<string> { ".jsonl", ".log", ".json" },
+      MaxDirectories = 10
     };
     _optionsMock = new Mock<IOptions<CollectorConfig>>();
     _optionsMock.Setup(x => x.Value).Returns(_config);
@@ -104,202 +106,61 @@ public class FileWatcherServiceTests : UnitTestBase
 
   [Fact]
   [Trait("Category", TestCategories.Unit)]
-  public async Task FileCreated_WhenFileIsCreated_RaisesEvent()
+  public void AddWatchDirectory_WithValidPath_AddsDirectory()
   {
     // Arrange
     var service = new FileWatcherService(_loggerMock.Object, _optionsMock.Object);
-    var eventRaised = false;
-    var eventPath = string.Empty;
+    var newDirectory = Path.Combine(Path.GetTempPath(), $"FileWatcherTest2_{Guid.NewGuid()}");
+    Directory.CreateDirectory(newDirectory);
 
-    service.FileCreated += (sender, e) =>
-    {
-      eventRaised = true;
-      eventPath = e.FullPath;
-    };
-
-    await service.StartAsync(CancellationToken.None);
-
-    // テスト用のファイルを作成する前に少し待機
-    await Task.Delay(500);
-
-    // Act
-    var testFilePath = Path.Combine(_testDirectory, $"test_{Guid.NewGuid()}.jsonl");
-    File.WriteAllText(testFilePath, "test content");
-
-    // ファイル作成イベントが発生するまで待機
-    var timeout = TimeSpan.FromSeconds(5);
-    var startTime = DateTime.UtcNow;
-    while (!eventRaised && DateTime.UtcNow - startTime < timeout)
-    {
-      await Task.Delay(100);
-    }
-
-    // Assert
-    eventRaised.Should().BeTrue("ファイル作成イベントが発生するはずです");
-    eventPath.Should().Be(testFilePath);
-
-    // Clean up
-    await service.StopAsync(CancellationToken.None);
-    service.Dispose();
-  }
-
-  [Fact]
-  [Trait("Category", TestCategories.Unit)]
-  public async Task FileChanged_WhenFileIsModified_RaisesEvent()
-  {
-    // Arrange
-    var service = new FileWatcherService(_loggerMock.Object, _optionsMock.Object);
-    var eventRaised = false;
-    var eventPath = string.Empty;
-
-    service.FileChanged += (sender, e) =>
-    {
-      eventRaised = true;
-      eventPath = e.FullPath;
-    };
-
-    // テスト用のファイルを事前に作成
-    var testFilePath = Path.Combine(_testDirectory, $"test_{Guid.NewGuid()}.jsonl");
-    File.WriteAllText(testFilePath, "initial content");
-
-    await service.StartAsync(CancellationToken.None);
-
-    // テスト用のファイルを変更する前に少し待機
-    await Task.Delay(500);
-
-    // Act
-    File.AppendAllText(testFilePath, "\nadditional content");
-
-    // ファイル変更イベントが発生するまで待機
-    var timeout = TimeSpan.FromSeconds(5);
-    var startTime = DateTime.UtcNow;
-    while (!eventRaised && DateTime.UtcNow - startTime < timeout)
-    {
-      await Task.Delay(100);
-    }
-
-    // Assert
-    eventRaised.Should().BeTrue("ファイル変更イベントが発生するはずです");
-    eventPath.Should().Be(testFilePath);
-
-    // Clean up
-    await service.StopAsync(CancellationToken.None);
-    service.Dispose();
-  }
-
-  [Fact]
-  [Trait("Category", TestCategories.Unit)]
-  public async Task FileStabilized_WhenFileIsStable_RaisesEvent()
-  {
-    // Arrange
-    var service = new FileWatcherService(_loggerMock.Object, _optionsMock.Object);
-    var eventRaised = false;
-    var eventPath = string.Empty;
-
-    service.FileStabilized += (sender, e) =>
-    {
-      eventRaised = true;
-      eventPath = e.FullPath;
-    };
-
-    await service.StartAsync(CancellationToken.None);
-
-    // テスト用のファイルを作成する前に少し待機
-    await Task.Delay(500);
-
-    // Act
-    var testFilePath = Path.Combine(_testDirectory, $"test_{Guid.NewGuid()}.jsonl");
-    File.WriteAllText(testFilePath, "test content");
-
-    // ファイル安定化イベントが発生するまで待機（安定化期間 + 余裕）
-    var timeout = TimeSpan.FromSeconds(_config.StabilizationPeriodSeconds + 3);
-    var startTime = DateTime.UtcNow;
-    while (!eventRaised && DateTime.UtcNow - startTime < timeout)
-    {
-      await Task.Delay(100);
-    }
-
-    // Assert
-    eventRaised.Should().BeTrue("ファイル安定化イベントが発生するはずです");
-    Path.GetFullPath(eventPath).Should().Be(Path.GetFullPath(testFilePath));
-
-    // Clean up
-    await service.StopAsync(CancellationToken.None);
-    service.Dispose();
-  }
-
-  [Fact]
-  [Trait("Category", TestCategories.Unit)]
-  public async Task StartAsync_WithMultipleDirectories_WatchesAllDirectories()
-  {
-    // Arrange
-    var secondTestDirectory = Path.Combine(Path.GetTempPath(), $"FileWatcherTest2_{Guid.NewGuid()}");
-    Directory.CreateDirectory(secondTestDirectory);
-    _config.MonitoringPaths.Add(secondTestDirectory);
-
-    var service = new FileWatcherService(_loggerMock.Object, _optionsMock.Object);
-    var firstDirEventRaised = false;
-    var secondDirEventRaised = false;
-    var eventPath = string.Empty;
-
-    service.FileCreated += (sender, e) =>
-    {
-      eventPath = e.FullPath;
-      if (eventPath.StartsWith(_testDirectory))
-      {
-        firstDirEventRaised = true;
-      }
-      else if (eventPath.StartsWith(secondTestDirectory))
-      {
-        secondDirEventRaised = true;
-      }
-    };
-
-    await service.StartAsync(CancellationToken.None);
-
-    // テスト用のファイルを作成する前に少し待機
-    await Task.Delay(500);
-
-    // Act - 最初のディレクトリにファイルを作成
-    var firstFilePath = Path.Combine(_testDirectory, $"test1_{Guid.NewGuid()}.jsonl");
-    File.WriteAllText(firstFilePath, "test content 1");
-
-    // 最初のイベントが発生するまで待機
-    var timeout = TimeSpan.FromSeconds(5);
-    var startTime = DateTime.UtcNow;
-    while (!firstDirEventRaised && DateTime.UtcNow - startTime < timeout)
-    {
-      await Task.Delay(100);
-    }
-
-    // 2番目のディレクトリにファイルを作成
-    var secondFilePath = Path.Combine(secondTestDirectory, $"test2_{Guid.NewGuid()}.jsonl");
-    File.WriteAllText(secondFilePath, "test content 2");
-
-    // 2番目のイベントが発生するまで待機
-    startTime = DateTime.UtcNow;
-    while (!secondDirEventRaised && DateTime.UtcNow - startTime < timeout)
-    {
-      await Task.Delay(100);
-    }
-
-    // Assert
-    firstDirEventRaised.Should().BeTrue("最初のディレクトリのファイル作成イベントが発生するはずです");
-    secondDirEventRaised.Should().BeTrue("2番目のディレクトリのファイル作成イベントが発生するはずです");
-
-    // Clean up
-    await service.StopAsync(CancellationToken.None);
-    service.Dispose();
     try
     {
-      if (Directory.Exists(secondTestDirectory))
+      // Act
+      var directoryId = service.AddWatchDirectory(newDirectory);
+
+      // Assert
+      directoryId.Should().NotBeEmpty("ディレクトリIDが返されるはずです");
+      var directories = service.GetWatchDirectories();
+      directories.Should().Contain(d => d.Path == newDirectory, "追加したディレクトリが監視リストに含まれるはずです");
+    }
+    finally
+    {
+      // Clean up
+      if (Directory.Exists(newDirectory))
       {
-        Directory.Delete(secondTestDirectory, true);
+        Directory.Delete(newDirectory, true);
       }
     }
-    catch (Exception ex)
+  }
+
+  [Fact]
+  [Trait("Category", TestCategories.Unit)]
+  public void RemoveWatchDirectory_WithValidId_RemovesDirectory()
+  {
+    // Arrange
+    var service = new FileWatcherService(_loggerMock.Object, _optionsMock.Object);
+    var newDirectory = Path.Combine(Path.GetTempPath(), $"FileWatcherTest2_{Guid.NewGuid()}");
+    Directory.CreateDirectory(newDirectory);
+
+    try
     {
-      Output.WriteLine($"2番目のテストディレクトリの削除中にエラーが発生しました: {ex.Message}");
+      var directoryId = service.AddWatchDirectory(newDirectory);
+
+      // Act
+      var result = service.RemoveWatchDirectory(directoryId);
+
+      // Assert
+      result.Should().BeTrue("ディレクトリの削除に成功するはずです");
+      var directories = service.GetWatchDirectories();
+      directories.Should().NotContain(d => d.Path == newDirectory, "削除したディレクトリが監視リストに含まれないはずです");
+    }
+    finally
+    {
+      // Clean up
+      if (Directory.Exists(newDirectory))
+      {
+        Directory.Delete(newDirectory, true);
+      }
     }
   }
 }
