@@ -69,8 +69,16 @@ public class IoTHubService : IIoTHubService, IDisposable
 
     try
     {
+      // キャンセルされた場合は早期リターン
+      if (cancellationToken.IsCancellationRequested)
+      {
+        _logger.LogWarning("接続がキャンセルされました: {DeviceId}", _config.DeviceId);
+        result.ErrorMessage = "接続がキャンセルされました";
+        return result;
+      }
+
       // 同時接続を防ぐためのロック
-      await _connectionLock.WaitAsync(cancellationToken);
+      await _connectionLock.WaitAsync(cancellationToken).ConfigureAwait(false);
 
       try
       {
@@ -86,14 +94,15 @@ public class IoTHubService : IIoTHubService, IDisposable
         _connectionState = ConnectionState.Connecting;
 
         // DeviceClientを作成
-        _deviceClient = await CreateDeviceClientAsync(cancellationToken);
+        _deviceClient = await CreateDeviceClientAsync(cancellationToken).ConfigureAwait(false);
 
         // 接続状態変更ハンドラを設定
         _deviceClient.SetConnectionStatusChangesHandler(ConnectionStatusChangesHandler);
 
         // 接続を開く
         await _retryPolicy.ExecuteAsync(async (ct) =>
-            await _deviceClient.OpenAsync(ct), cancellationToken);
+            await _deviceClient.OpenAsync(ct).ConfigureAwait(false), 
+            cancellationToken).ConfigureAwait(false);
 
         _connectionState = ConnectionState.Connected;
         result.Success = true;
@@ -103,6 +112,12 @@ public class IoTHubService : IIoTHubService, IDisposable
       {
         _connectionLock.Release();
       }
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+      // キャンセルは正常な動作
+      _logger.LogInformation("IoT Hub接続がキャンセルされました: {DeviceId}", _config.DeviceId);
+      result.ErrorMessage = "接続がキャンセルされました";
     }
     catch (Exception ex)
     {
@@ -133,7 +148,14 @@ public class IoTHubService : IIoTHubService, IDisposable
 
     try
     {
-      await _connectionLock.WaitAsync(cancellationToken);
+      // キャンセルされた場合は早期リターン
+      if (cancellationToken.IsCancellationRequested)
+      {
+        _logger.LogWarning("切断処理がキャンセルされました: {DeviceId}", _config.DeviceId);
+        return;
+      }
+
+      await _connectionLock.WaitAsync(cancellationToken).ConfigureAwait(false);
 
       try
       {
@@ -142,7 +164,8 @@ public class IoTHubService : IIoTHubService, IDisposable
 
         // 接続を閉じる
         await _retryPolicy.ExecuteAsync(async (ct) =>
-            await _deviceClient.CloseAsync(ct), cancellationToken);
+            await _deviceClient.CloseAsync(ct).ConfigureAwait(false), 
+            cancellationToken).ConfigureAwait(false);
 
         _deviceClient.Dispose();
         _deviceClient = null;
@@ -154,6 +177,11 @@ public class IoTHubService : IIoTHubService, IDisposable
       {
         _connectionLock.Release();
       }
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+      // キャンセルは正常な動作
+      _logger.LogInformation("IoT Hub切断処理がキャンセルされました: {DeviceId}", _config.DeviceId);
     }
     catch (Exception ex)
     {
@@ -181,6 +209,14 @@ public class IoTHubService : IIoTHubService, IDisposable
     {
       _logger.LogInformation("ファイルのアップロードを開始します: {FilePath} -> {BlobName}", filePath, blobName);
 
+      // キャンセルされた場合は早期リターン
+      if (cancellationToken.IsCancellationRequested)
+      {
+        _logger.LogWarning("アップロードがキャンセルされました: {FilePath}", filePath);
+        result.ErrorMessage = "アップロードがキャンセルされました";
+        return result;
+      }
+
       // ファイルの存在確認
       if (!File.Exists(filePath))
       {
@@ -195,24 +231,38 @@ public class IoTHubService : IIoTHubService, IDisposable
       if (_deviceClient == null || _connectionState != ConnectionState.Connected)
       {
         _logger.LogWarning("ファイルアップロード前に接続が確立されていません。接続を試みます。");
-        var connectionResult = await ConnectAsync(cancellationToken);
+        var connectionResult = await ConnectAsync(cancellationToken).ConfigureAwait(false);
         if (!connectionResult.Success)
         {
           throw new InvalidOperationException("IoT Hubに接続できませんでした");
         }
       }
 
+      // キャンセルされた場合は早期リターン
+      if (cancellationToken.IsCancellationRequested)
+      {
+        _logger.LogWarning("アップロードがキャンセルされました: {FilePath}", filePath);
+        result.ErrorMessage = "アップロードがキャンセルされました";
+        return result;
+      }
+
       // ファイルをアップロード
-      using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read))
+      using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, true))
       {
         await _retryPolicy.ExecuteAsync(async (ct) =>
-            await UploadFileToIoTHubAsync(fileStream, blobName, ct),
-            cancellationToken);
+            await UploadFileToIoTHubAsync(fileStream, blobName, ct).ConfigureAwait(false),
+            cancellationToken).ConfigureAwait(false);
       }
 
       result.Success = true;
       _logger.LogInformation("ファイルのアップロードが完了しました: {FilePath} -> {BlobName}, サイズ: {Size} バイト",
           filePath, blobName, result.FileSizeBytes);
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+      // キャンセルは正常な動作
+      _logger.LogInformation("ファイルアップロードがキャンセルされました: {FilePath}", filePath);
+      result.ErrorMessage = "アップロードがキャンセルされました";
     }
     catch (Exception ex)
     {
@@ -244,6 +294,12 @@ public class IoTHubService : IIoTHubService, IDisposable
   /// <returns>DeviceClient</returns>
   protected virtual async Task<DeviceClient> CreateDeviceClientAsync(CancellationToken cancellationToken)
   {
+    // キャンセルされた場合は早期リターン
+    if (cancellationToken.IsCancellationRequested)
+    {
+      throw new OperationCanceledException("DeviceClient作成がキャンセルされました", cancellationToken);
+    }
+
     DeviceClient deviceClient;
 
     // 認証方法に応じてDeviceClientを作成
@@ -265,8 +321,18 @@ public class IoTHubService : IIoTHubService, IDisposable
           TransportType.Mqtt);
     }
 
+    // DeviceClientのオプション設定
+    var options = new ClientOptions
+    {
+      // 操作タイムアウトを設定
+      OperationTimeout = TimeSpan.FromMinutes(2)
+    };
+    deviceClient.SetConnectionStatusChangesHandler(ConnectionStatusChangesHandler);
+    deviceClient.SetRetryPolicy(new ExponentialBackoff(5, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(1)));
+
     // 非同期メソッドのため、ダミーのタスクを返す
-    await Task.CompletedTask;
+    // ConfigureAwait(false)を使用して同期コンテキストを最適化
+    await Task.CompletedTask.ConfigureAwait(false);
 
     return deviceClient;
   }
@@ -285,6 +351,12 @@ public class IoTHubService : IIoTHubService, IDisposable
       throw new InvalidOperationException("DeviceClientが初期化されていません");
     }
 
+    // キャンセルされた場合は早期リターン
+    if (cancellationToken.IsCancellationRequested)
+    {
+      throw new OperationCanceledException("ファイルアップロードがキャンセルされました", cancellationToken);
+    }
+
     // 現在の日付に基づいてフォルダ構造を作成 (yyyy/MM/dd/{machineId})
     var today = DateTime.UtcNow;
     var folderPath = Path.Combine(
@@ -299,7 +371,9 @@ public class IoTHubService : IIoTHubService, IDisposable
     _logger.LogInformation("ファイルをアップロードします: {Path}, サイズ: {Size} バイト", uploadPath, fileStream.Length);
 
     // UploadToBlobAsyncを使用（問題が解決するまで一時的対応）
-    await _deviceClient.UploadToBlobAsync(uploadPath, fileStream);
+    // 注意: Azure IoT SDK内部でConfigureAwait(false)が使用されていない可能性があるため、
+    // 呼び出し元でConfigureAwait(false)を使用することで、デッドロックのリスクを軽減
+    await _deviceClient.UploadToBlobAsync(uploadPath, fileStream, cancellationToken).ConfigureAwait(false);
     _logger.LogInformation("ファイルのアップロードが完了しました: {Path}", uploadPath);
   }
 
@@ -348,7 +422,14 @@ public class IoTHubService : IIoTHubService, IDisposable
   {
     try
     {
-      await ConnectAsync();
+      // 再接続のためのキャンセルトークンを作成（タイムアウト付き）
+      using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+      await ConnectAsync(cts.Token).ConfigureAwait(false);
+    }
+    catch (OperationCanceledException)
+    {
+      // タイムアウトは正常
+      _logger.LogWarning("自動再接続がタイムアウトしました");
     }
     catch (Exception ex)
     {
