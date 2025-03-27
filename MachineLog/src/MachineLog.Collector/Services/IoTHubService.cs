@@ -493,8 +493,12 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
           using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
           var closeTask = _deviceClient.CloseAsync(cts.Token);
 
-          // 限定的なコンテキストでのみ待機
-          if (!closeTask.Wait(5000))
+          // GetAwaiter().GetResult()を使用して同期的に待機し、例外を適切に伝播
+          try
+          {
+            _deviceClient.CloseAsync(cts.Token).GetAwaiter().GetResult();
+          }
+          catch (OperationCanceledException)
           {
             _logger.LogWarning("IoT Hubクライアントの切断がタイムアウトしました");
           }

@@ -521,11 +521,17 @@ public class BatchProcessorService : AsyncDisposableBase<BatchProcessorService>,
       {
         if (_isProcessing && _processingTask != null)
         {
-          // 同期的にバッチを処理し、短いタイムアウトを設定
-          ProcessBatchAsync(true, CancellationToken.None).GetAwaiter().GetResult();
+          // 非同期処理を同期的に実行
+          Task.Run(async () =>
+          {
+            // 非同期的にバッチを処理
+            await ProcessBatchAsync(true, CancellationToken.None);
 
-          // タスクが完了するまで短時間待機
-          if (!_processingTask.Wait(TimeSpan.FromSeconds(3)))
+            // タスクが完了するまで短時間待機
+            await Task.WhenAny(_processingTask, Task.Delay(TimeSpan.FromSeconds(3)));
+          }).Wait(TimeSpan.FromSeconds(5));
+
+          if (_processingTask != null && !_processingTask.IsCompleted)
           {
             _logger.LogWarning("タスク完了待機がタイムアウトしました");
           }
