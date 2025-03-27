@@ -28,3 +28,4 @@
 - PR #32のレビューコメントに対応
   - 非推奨APIの使用を修正（UploadToBlobAsyncの新しいバージョンを使用）
   - 再接続ロジックを改善（専用のHandleReconnectionAsyncメソッドを作成）
+  - ConnectionStatusChangesHandlerにdefaultケースを追加（未知の接続状態をエラー状態として処理）
