@@ -68,7 +68,7 @@ public class FileProcessorService : IFileProcessorService
       }
 
       // ファイルのエンコーディングを検出
-      var encodingDetailResult = await DetectEncodingDetailedAsync(filePath);
+      var encodingDetailResult = await GetEncodingDetectionResultAsync(filePath);
       if (!encodingDetailResult.IsValidEncoding)
       {
         _logger.LogError("ファイルの読み込みに失敗しました: {FilePath}, エラー: {Error}", filePath, encodingDetailResult.ErrorMessage);
@@ -134,11 +134,11 @@ public class FileProcessorService : IFileProcessorService
   }
 
   /// <summary>
-  /// 詳細なエンコーディング情報を検出します
+  /// 詳細なエンコーディング検出結果を取得します
   /// </summary>
   /// <param name="filePath">ファイルパス</param>
   /// <returns>詳細なエンコーディング検出結果</returns>
-  private async Task<EncodingDetectionResult> DetectEncodingDetailedAsync(string filePath)
+  private async Task<EncodingDetectionResult> GetEncodingDetectionResultAsync(string filePath)
   {
     return await _encodingDetector.DetectEncodingAsync(filePath);
   }
