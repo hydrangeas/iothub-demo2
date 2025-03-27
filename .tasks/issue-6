@@ -43,3 +43,6 @@ LogEntryオブジェクトをバッチとして効率的に処理するための
   - LogEntryBatchProcessor.cs: LogEntryのバッチ処理クラスを実装
   - BatchProcessingExample.cs: バッチ処理機能の使用例を実装
   - MachineLog.Common.csprojにSystem.Threading.Channelsパッケージを追加
+- 2025/03/27: PR#30に対するレビューコメントへの対応
+  - バッチタイマーコールバックとアイドルタイムアウトコールバックの2つのasync voidメソッドにtry-catch例外処理を追加
+  - PR説明のマークダウン改行問題を修正（\n文字列を実際の改行に置換）

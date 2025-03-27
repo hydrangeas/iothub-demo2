@@ -235,7 +235,15 @@ public abstract class BatchProcessorBase<T> : IBatchProcessor<T>, IDisposable wh
   /// </summary>
   private async void ProcessBatchTimerCallback(object state)
   {
-    await ProcessBatchAsync();
+    try
+    {
+      await ProcessBatchAsync();
+    }
+    catch (Exception ex)
+    {
+      // エラーログ出力など
+      Console.Error.WriteLine($"バッチ処理タイマーコールバックでエラーが発生しました: {ex}");
+    }
   }
 
   /// <summary>
@@ -243,10 +251,18 @@ public abstract class BatchProcessorBase<T> : IBatchProcessor<T>, IDisposable wh
   /// </summary>
   private async void IdleTimeoutCallback(object state)
   {
-    var idleTime = DateTime.UtcNow - _lastItemAddedTime;
-    if (idleTime.TotalMilliseconds >= _options.IdleTimeoutInMilliseconds && GetCurrentBatchCount() > 0)
+    try
     {
-      await ProcessBatchAsync();
+      var idleTime = DateTime.UtcNow - _lastItemAddedTime;
+      if (idleTime.TotalMilliseconds >= _options.IdleTimeoutInMilliseconds && GetCurrentBatchCount() > 0)
+      {
+        await ProcessBatchAsync();
+      }
+    }
+    catch (Exception ex)
+    {
+      // エラーログ出力など
+      Console.Error.WriteLine($"アイドルタイムアウトコールバックでエラーが発生しました: {ex}");
     }
   }
 
