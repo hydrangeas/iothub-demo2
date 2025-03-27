@@ -1,0 +1,48 @@
+# Issue #11: 非機能要件: リソース管理の最適化
+
+## 実装内容
+
+### 共通ユーティリティの実装
+
+1. リソース管理の中心的なクラス `ResourceManager` を実装
+   - シングルトンパターンで実装され、アプリケーション全体のリソースを追跡
+   - メモリ使用量の監視（Process.GetCurrentProcess()を使用）
+   - リソースリークの検出機能（長時間未解放のリソースを検出）
+   - アイドル状態のリソースの自動解放機能
+   - メモリ圧迫時の自動解放機能
+
+2. 基底クラス `DisposableBase` を実装
+   - IDisposable/IAsyncDisposable の両方を適切に実装するパターンを提供
+   - Dispose/DisposeAsync のベストプラクティスに従った実装
+   - Finalizerパターンの最適化
+
+3. 専用の実装クラス
+   - `AsyncDisposableBase<T>` - 非同期リソース用の基底クラス
+   - `SyncDisposableBase<T>` - 同期リソース用の基底クラス
+
+### サービスクラスの改善
+
+1. インターフェース（IDisposable, IAsyncDisposable の実装）
+   - IIoTHubService
+   - IFileWatcherService
+   - IBatchProcessorService
+
+2. サービス実装の改良
+   - IoTHubService - AsyncDisposableBase<T> を継承
+   - FileWatcherService - AsyncDisposableBase<T> を継承
+   - BatchProcessorService - AsyncDisposableBase<T> を継承
+
+すべてのサービスで以下の改善を実施:
+- マネージドリソースの適切な解放
+- 非同期リソースの適切な解放
+- Dispose/DisposeAsyncの一貫した実装
+- リソース追跡とメモリ使用量監視
+- ThrowIfDisposed() によるオブジェクト破棄後の使用防止
+
+## 結果
+
+- メモリリークの防止
+- 確実なリソース解放パターンの実装
+- アプリケーション全体のメモリ使用量の可視化と制限
+- エラー耐性の向上（リソース解放失敗時の例外処理）
+- 非同期リソース解放による性能の最適化

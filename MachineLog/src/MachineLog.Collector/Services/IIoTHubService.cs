@@ -3,7 +3,7 @@ namespace MachineLog.Collector.Services;
 /// <summary>
 /// IoT Hubサービスのインターフェース
 /// </summary>
-public interface IIoTHubService
+public interface IIoTHubService : IDisposable, IAsyncDisposable
 {
   /// <summary>
   /// IoT Hubに接続します

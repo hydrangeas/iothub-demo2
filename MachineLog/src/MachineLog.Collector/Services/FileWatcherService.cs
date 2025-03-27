@@ -1,4 +1,5 @@
 using MachineLog.Collector.Models;
+using MachineLog.Common.Utilities;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Collections.Concurrent;
@@ -9,7 +10,7 @@ namespace MachineLog.Collector.Services;
 /// <summary>
 /// ファイル監視サービスの実装
 /// </summary>
-public class FileWatcherService : IFileWatcherService, IDisposable
+public class FileWatcherService : AsyncDisposableBase<FileWatcherService>, IFileWatcherService
 {
   private readonly ILogger<FileWatcherService> _logger;
   private readonly CollectorConfig _config;
@@ -17,7 +18,6 @@ public class FileWatcherService : IFileWatcherService, IDisposable
   private readonly ConcurrentDictionary<string, FileSystemWatcher> _watchers = new();
   private readonly ConcurrentDictionary<string, DateTime> _processingFiles = new();
   private Timer? _stabilityCheckTimer;
-  private bool _isDisposed;
   private bool _isRunning;
 
   /// <summary>
@@ -42,7 +42,7 @@ public class FileWatcherService : IFileWatcherService, IDisposable
   /// <param name="config">設定</param>
   public FileWatcherService(
       ILogger<FileWatcherService> logger,
-      IOptions<CollectorConfig> config)
+      IOptions<CollectorConfig> config) : base(true) // リソースマネージャーに登録
   {
     _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
@@ -69,6 +69,9 @@ public class FileWatcherService : IFileWatcherService, IDisposable
   /// </summary>
   public Task StartAsync(CancellationToken cancellationToken)
   {
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
+
     _logger.LogInformation("ファイル監視サービスを開始しています...");
 
     if (_directoryConfigs.Count == 0)
@@ -121,6 +124,9 @@ public class FileWatcherService : IFileWatcherService, IDisposable
   /// </summary>
   public Task StopAsync(CancellationToken cancellationToken)
   {
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
+
     _logger.LogInformation("ファイル監視サービスを停止しています...");
 
     foreach (var watcherEntry in _watchers)
@@ -150,6 +156,9 @@ public class FileWatcherService : IFileWatcherService, IDisposable
   /// <returns>追加された監視設定の識別子</returns>
   public string AddWatchDirectory(string directoryPath)
   {
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
+
     if (string.IsNullOrEmpty(directoryPath))
     {
       throw new ArgumentNullException(nameof(directoryPath));
@@ -170,6 +179,9 @@ public class FileWatcherService : IFileWatcherService, IDisposable
   /// <returns>追加された監視設定の識別子</returns>
   public string AddWatchDirectory(DirectoryWatcherConfig config)
   {
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
+
     if (config == null)
     {
       throw new ArgumentNullException(nameof(config));
@@ -226,6 +238,9 @@ public class FileWatcherService : IFileWatcherService, IDisposable
   /// <returns>削除に成功したかどうか</returns>
   public bool RemoveWatchDirectory(string directoryId)
   {
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
+
     if (string.IsNullOrEmpty(directoryId))
     {
       throw new ArgumentNullException(nameof(directoryId));
@@ -258,6 +273,9 @@ public class FileWatcherService : IFileWatcherService, IDisposable
   /// <returns>削除に成功したかどうか</returns>
   public bool RemoveWatchDirectoryByPath(string directoryPath)
   {
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
+
     if (string.IsNullOrEmpty(directoryPath))
     {
       throw new ArgumentNullException(nameof(directoryPath));
@@ -281,6 +299,9 @@ public class FileWatcherService : IFileWatcherService, IDisposable
   /// <returns>監視設定のリスト</returns>
   public IReadOnlyList<DirectoryWatcherConfig> GetWatchDirectories()
   {
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
+
     return _directoryConfigs.Values.ToList();
   }
 
@@ -333,6 +354,8 @@ public class FileWatcherService : IFileWatcherService, IDisposable
   /// </summary>
   private void CheckFileStability(object? state)
   {
+    if (_disposed) return;
+
     var now = DateTime.UtcNow;
     var stabilizationPeriod = TimeSpan.FromSeconds(_config.StabilizationPeriodSeconds);
     var filesToRemove = new List<string>();
@@ -404,35 +427,114 @@ public class FileWatcherService : IFileWatcherService, IDisposable
   }
 
   /// <summary>
-  /// リソースを解放します
+  /// リソースのサイズを推定します
   /// </summary>
-  public void Dispose()
+  /// <returns>推定サイズ（バイト単位）</returns>
+  protected override long EstimateResourceSize()
   {
-    Dispose(true);
-    GC.SuppressFinalize(this);
+    // FileSystemWatcherやTimerなどのリソースを考慮
+    return 2 * 1024 * 1024; // 2MB
   }
 
   /// <summary>
-  /// リソースを解放します
+  /// マネージドリソースを解放します
   /// </summary>
-  protected virtual void Dispose(bool disposing)
+  protected override void ReleaseManagedResources()
   {
-    if (_isDisposed)
-    {
-      return;
-    }
+    _logger.LogInformation("FileWatcherServiceのリソースを解放します");
 
-    if (disposing)
+    try
     {
+      // 監視中のファイルウォッチャーをすべて解放
       foreach (var watcherEntry in _watchers)
       {
-        watcherEntry.Value.Dispose();
+        try
+        {
+          var watcher = watcherEntry.Value;
+          watcher.EnableRaisingEvents = false;
+          watcher.Created -= OnFileCreated;
+          watcher.Changed -= OnFileChanged;
+          watcher.Dispose();
+        }
+        catch (Exception ex)
+        {
+          _logger.LogWarning(ex, "FileSystemWatcherの解放中にエラーが発生しました: {WatcherId}", watcherEntry.Key);
+        }
       }
 
       _watchers.Clear();
-      _stabilityCheckTimer?.Dispose();
+
+      // タイマーの停止と解放
+      if (_stabilityCheckTimer != null)
+      {
+        _stabilityCheckTimer.Change(Timeout.Infinite, Timeout.Infinite);
+        _stabilityCheckTimer.Dispose();
+        _stabilityCheckTimer = null;
+      }
+
+      // 内部コレクションのクリア
+      _processingFiles.Clear();
+      _directoryConfigs.Clear();
+    }
+    catch (Exception ex)
+    {
+      _logger.LogError(ex, "FileWatcherServiceのリソース解放中にエラーが発生しました");
     }
 
-    _isDisposed = true;
+    _isRunning = false;
+
+    // 基底クラスの処理を呼び出す
+    base.ReleaseManagedResources();
+  }
+
+  /// <summary>
+  /// マネージドリソースを非同期で解放します
+  /// </summary>
+  protected override async ValueTask ReleaseManagedResourcesAsync()
+  {
+    _logger.LogInformation("FileWatcherServiceのリソースを非同期で解放します");
+
+    try
+    {
+      // 監視中のファイルウォッチャーをすべて解放
+      foreach (var watcherEntry in _watchers)
+      {
+        try
+        {
+          var watcher = watcherEntry.Value;
+          watcher.EnableRaisingEvents = false;
+          watcher.Created -= OnFileCreated;
+          watcher.Changed -= OnFileChanged;
+          watcher.Dispose();
+        }
+        catch (Exception ex)
+        {
+          _logger.LogWarning(ex, "FileSystemWatcherの非同期解放中にエラーが発生しました: {WatcherId}", watcherEntry.Key);
+        }
+      }
+
+      _watchers.Clear();
+
+      // タイマーの停止と解放
+      if (_stabilityCheckTimer != null)
+      {
+        _stabilityCheckTimer.Change(Timeout.Infinite, Timeout.Infinite);
+        _stabilityCheckTimer.Dispose();
+        _stabilityCheckTimer = null;
+      }
+
+      // 内部コレクションのクリア
+      _processingFiles.Clear();
+      _directoryConfigs.Clear();
+    }
+    catch (Exception ex)
+    {
+      _logger.LogError(ex, "FileWatcherServiceのリソース非同期解放中にエラーが発生しました");
+    }
+
+    _isRunning = false;
+
+    // 基底クラスの処理を呼び出す
+    await base.ReleaseManagedResourcesAsync().ConfigureAwait(false);
   }
 }

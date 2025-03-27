@@ -5,7 +5,7 @@ namespace MachineLog.Collector.Services;
 /// <summary>
 /// バッチ処理サービスのインターフェース
 /// </summary>
-public interface IBatchProcessorService
+public interface IBatchProcessorService : IDisposable, IAsyncDisposable
 {
   /// <summary>
   /// エントリをバッチに追加します
