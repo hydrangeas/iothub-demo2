@@ -55,6 +55,10 @@ public static class ServiceCollectionExtensions
     // バッチ処理サービスの登録
     services.AddSingleton<IBatchProcessorService, BatchProcessorService>();
 
+    // ファイル保持ポリシー関連サービスの登録
+    services.AddSingleton<IFileRetentionService, FileRetentionService>();
+    services.AddHostedService<FileRetentionHostedService>();
+
     // バリデーターの登録
     services.AddTransient<FluentValidation.IValidator<MachineLog.Common.Models.LogEntry>, MachineLog.Common.Validation.LogEntryValidator>();
 

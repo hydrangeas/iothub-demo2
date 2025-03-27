@@ -45,11 +45,9 @@
 リモートリポジトリがGitHubである場合、プルリクエストを作成します。
 コマンドは `gh pr create --title subject --body description --base main` です。
 `subject` には `sub (issue #XX)` の形式とし `sub` にはタスクの要約を日本語で記載し `XX` にはIssue番号を記載してください。
-`description` には作業内容を詳細に記載します。
+`description` には作業内容を詳細に記載します。その際、`Fixes #XX` を含めてください。`XX` にはIssue番号を記載してください。
 `main` は、そのリポジトリのメインブランチを記載します。場合によって、main、master、defaultなどから判断してください。
 なお、リモートリポジトリが存在しない場合は、このコマンドは実行しないでください。
-
-プルリクエストを作成する場合は、必ずIssueと紐づけてください。
 
 ## プルリクエストの指摘確認、修正
 
