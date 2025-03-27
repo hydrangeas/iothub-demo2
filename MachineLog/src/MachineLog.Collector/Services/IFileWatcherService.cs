@@ -6,7 +6,7 @@ namespace MachineLog.Collector.Services;
 /// <summary>
 /// ファイル監視サービスのインターフェース
 /// </summary>
-public interface IFileWatcherService
+public interface IFileWatcherService : IDisposable, IAsyncDisposable
 {
   /// <summary>
   /// ファイル監視を開始します
