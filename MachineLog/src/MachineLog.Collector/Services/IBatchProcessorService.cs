@@ -16,6 +16,14 @@ public interface IBatchProcessorService : IDisposable, IAsyncDisposable
   Task<bool> AddToBatchAsync(LogEntry entry, CancellationToken cancellationToken = default);
 
   /// <summary>
+  /// 複数のエントリをバッチに追加します
+  /// </summary>
+  /// <param name="entries">ログエントリのコレクション</param>
+  /// <param name="cancellationToken">キャンセレーショントークン</param>
+  /// <returns>追加が成功したかどうか</returns>
+  Task<bool> AddRangeToBatchAsync(IEnumerable<LogEntry> entries, CancellationToken cancellationToken = default);
+
+  /// <summary>
   /// 現在のバッチを処理します
   /// </summary>
   /// <param name="force">強制的に処理するかどうか（バッチサイズやカウントに関わらず）</param>
