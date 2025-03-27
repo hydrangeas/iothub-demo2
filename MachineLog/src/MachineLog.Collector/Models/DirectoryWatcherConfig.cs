@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.IO;
 
 namespace MachineLog.Collector.Models;
 
@@ -49,5 +51,12 @@ public class DirectoryWatcherConfig
   public DirectoryWatcherConfig(string path, string fileFilter) : this(path)
   {
     FileFilter = fileFilter ?? throw new ArgumentNullException(nameof(fileFilter));
+  }
+
+  /// <summary>
+  /// パラメータなしコンストラクタ
+  /// </summary>
+  public DirectoryWatcherConfig()
+  {
   }
 }
