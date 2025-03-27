@@ -123,8 +123,10 @@ public class FileProcessorService : IFileProcessorService
   }
 
   /// <summary>
-  /// ファイルのエンコーディングを検出します
+  /// ファイルのエンコーディングを検出します（インターフェース実装）
   /// </summary>
+  /// <param name="filePath">ファイルパス</param>
+  /// <returns>検出されたエンコーディング</returns>
   public async Task<Encoding> DetectEncodingAsync(string filePath)
   {
     var result = await _encodingDetector.DetectEncodingAsync(filePath);
@@ -157,24 +159,35 @@ public class FileProcessorService : IFileProcessorService
 
       // ファイル拡張子が設定と一致するか確認
       var extension = Path.GetExtension(filePath).ToLowerInvariant();
+      bool isExtensionAllowed = false;
 
-      // 設定ファイルの拡張子リストに基づいてチェック
-      if (_config.FileExtensions.Any() && !_config.FileExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase))
+      // 拡張子リストが設定されている場合はそれを優先
+      if (_config.FileExtensions.Any())
       {
-        _logger.LogInformation("ファイル拡張子が対象外です: {FilePath}, 拡張子: {Extension}", filePath, extension);
-        return false;
-      }
-
-      // ワイルドカード式のファイルフィルターをチェック
-      var fileFilter = _config.FileFilter.ToLowerInvariant();
-      if (fileFilter.StartsWith("*."))
-      {
-        var allowedExtension = fileFilter.Substring(1);
-        if (!extension.Equals(allowedExtension, StringComparison.OrdinalIgnoreCase))
+        isExtensionAllowed = _config.FileExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase);
+        if (!isExtensionAllowed)
         {
-          _logger.LogInformation("ファイル拡張子がフィルターに一致しません: {FilePath}, フィルター: {Filter}", filePath, fileFilter);
+          _logger.LogInformation("ファイル拡張子が対象外です: {FilePath}, 拡張子: {Extension}, 許可された拡張子: {AllowedExtensions}",
+            filePath, extension, string.Join(", ", _config.FileExtensions));
           return false;
         }
+      }
+      // 拡張子リストが空でワイルドカードが設定されている場合
+      else if (!string.IsNullOrEmpty(_config.FileFilter) && _config.FileFilter.StartsWith("*."))
+      {
+        var allowedExtension = _config.FileFilter.Substring(1).ToLowerInvariant();
+        isExtensionAllowed = extension.Equals(allowedExtension, StringComparison.OrdinalIgnoreCase);
+        if (!isExtensionAllowed)
+        {
+          _logger.LogInformation("ファイル拡張子がフィルターに一致しません: {FilePath}, 拡張子: {Extension}, フィルター: {Filter}",
+            filePath, extension, _config.FileFilter);
+          return false;
+        }
+      }
+      // どちらも設定されていない場合は全ての拡張子を許可
+      else
+      {
+        isExtensionAllowed = true;
       }
 
       // ファイルサイズが大きすぎないか確認
