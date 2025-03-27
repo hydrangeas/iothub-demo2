@@ -10,7 +10,6 @@ namespace MachineLog.Common.Synchronization
     public class AsyncLock : IDisposable
     {
         private readonly SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
-        private readonly Task<IDisposable> _releaser;
         private bool _isDisposed;
 
         /// <summary>
@@ -18,7 +17,6 @@ namespace MachineLog.Common.Synchronization
         /// </summary>
         public AsyncLock()
         {
-            _releaser = Task.FromResult<IDisposable>(new Releaser(this));
         }
 
         /// <summary>
@@ -29,7 +27,7 @@ namespace MachineLog.Common.Synchronization
         public async Task<IDisposable> LockAsync(CancellationToken cancellationToken = default)
         {
             await _semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
-            return _releaser.Result;
+            return new Releaser(this);
         }
 
         /// <summary>
@@ -39,7 +37,7 @@ namespace MachineLog.Common.Synchronization
         public IDisposable Lock()
         {
             _semaphore.Wait();
-            return _releaser.Result;
+            return new Releaser(this);
         }
 
         /// <summary>

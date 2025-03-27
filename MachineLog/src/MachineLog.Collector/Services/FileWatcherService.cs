@@ -335,15 +335,13 @@ public class FileWatcherService : IFileWatcherService, IDisposable, IAsyncDispos
         return false;
       }
 
-      // 識別子を使用して削除（書き込みロックを取得するため、ロックを解放してから呼び出す）
+      // 識別子を使用して削除
       string directoryId = configEntry.Key;
-      _configLock.ExitUpgradeableReadLock();
       return RemoveWatchDirectory(directoryId);
     }
-    catch
+    finally
     {
       _configLock.ExitUpgradeableReadLock();
-      throw;
     }
   }
 
