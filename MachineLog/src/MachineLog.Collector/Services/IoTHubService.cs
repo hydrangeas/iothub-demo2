@@ -1,4 +1,5 @@
 using MachineLog.Collector.Models;
+using MachineLog.Common.Utilities;
 using Microsoft.Azure.Devices.Client;
 using Microsoft.Azure.Devices.Client.Exceptions;
 using Microsoft.Azure.Devices.Client.Transport;
@@ -15,7 +16,7 @@ namespace MachineLog.Collector.Services;
 /// <summary>
 /// IoT Hubサービスの実装
 /// </summary>
-public class IoTHubService : IIoTHubService, IDisposable
+public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
 {
   private readonly ILogger<IoTHubService> _logger;
   private readonly IoTHubConfig _config;
@@ -23,7 +24,6 @@ public class IoTHubService : IIoTHubService, IDisposable
   private ConnectionState _connectionState;
   private readonly SemaphoreSlim _connectionLock = new SemaphoreSlim(1, 1);
   private readonly AsyncRetryPolicy _retryPolicy;
-  private bool _disposed;
 
   /// <summary>
   /// コンストラクタ
@@ -32,7 +32,7 @@ public class IoTHubService : IIoTHubService, IDisposable
   /// <param name="config">IoT Hub設定</param>
   public IoTHubService(
       ILogger<IoTHubService> logger,
-      IOptions<IoTHubConfig> config)
+      IOptions<IoTHubConfig> config) : base(true) // リソースマネージャーに登録
   {
     _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
@@ -60,6 +60,9 @@ public class IoTHubService : IIoTHubService, IDisposable
   /// </summary>
   public virtual async Task<ConnectionResult> ConnectAsync(CancellationToken cancellationToken = default)
   {
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
+
     var result = new ConnectionResult
     {
       Success = false
@@ -101,7 +104,7 @@ public class IoTHubService : IIoTHubService, IDisposable
 
         // 接続を開く
         await _retryPolicy.ExecuteAsync(async (ct) =>
-            await _deviceClient.OpenAsync(ct).ConfigureAwait(false), 
+            await _deviceClient.OpenAsync(ct).ConfigureAwait(false),
             cancellationToken).ConfigureAwait(false);
 
         _connectionState = ConnectionState.Connected;
@@ -140,6 +143,9 @@ public class IoTHubService : IIoTHubService, IDisposable
   /// </summary>
   public virtual async Task DisconnectAsync(CancellationToken cancellationToken = default)
   {
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
+
     if (_deviceClient == null || _connectionState == ConnectionState.Disconnected)
     {
       _logger.LogWarning("切断を試みましたが、接続されていません: {DeviceId}", _config.DeviceId);
@@ -164,7 +170,7 @@ public class IoTHubService : IIoTHubService, IDisposable
 
         // 接続を閉じる
         await _retryPolicy.ExecuteAsync(async (ct) =>
-            await _deviceClient.CloseAsync(ct).ConfigureAwait(false), 
+            await _deviceClient.CloseAsync(ct).ConfigureAwait(false),
             cancellationToken).ConfigureAwait(false);
 
         _deviceClient.Dispose();
@@ -196,6 +202,9 @@ public class IoTHubService : IIoTHubService, IDisposable
   /// </summary>
   public virtual async Task<FileUploadResult> UploadFileAsync(string filePath, string blobName, CancellationToken cancellationToken = default)
   {
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
+
     var result = new FileUploadResult
     {
       Success = false,
@@ -284,6 +293,9 @@ public class IoTHubService : IIoTHubService, IDisposable
   /// </summary>
   public virtual ConnectionState GetConnectionState()
   {
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
+
     return _connectionState;
   }
 
@@ -307,8 +319,12 @@ public class IoTHubService : IIoTHubService, IDisposable
     {
       // SASトークンを使用した認証
       _logger.LogInformation("SASトークンを使用してDeviceClientを作成します: {DeviceId}", _config.DeviceId);
+
+      // 接続文字列からホスト名を抽出
+      string hostName = ExtractHostNameFromConnectionString(_config.ConnectionString);
+
       deviceClient = DeviceClient.Create(
-          GetHostNameFromConnectionString(_config.ConnectionString),
+          hostName,
           new DeviceAuthenticationWithToken(_config.DeviceId, _config.SasToken),
           TransportType.Mqtt);
     }
@@ -322,19 +338,40 @@ public class IoTHubService : IIoTHubService, IDisposable
     }
 
     // DeviceClientのオプション設定
-    var options = new ClientOptions
-    {
-      // 操作タイムアウトを設定
-      OperationTimeout = TimeSpan.FromMinutes(2)
-    };
     deviceClient.SetConnectionStatusChangesHandler(ConnectionStatusChangesHandler);
     deviceClient.SetRetryPolicy(new ExponentialBackoff(5, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(1)));
+    deviceClient.OperationTimeoutInMilliseconds = (uint)TimeSpan.FromMinutes(2).TotalMilliseconds;
 
     // 非同期メソッドのため、ダミーのタスクを返す
     // ConfigureAwait(false)を使用して同期コンテキストを最適化
     await Task.CompletedTask.ConfigureAwait(false);
 
     return deviceClient;
+  }
+
+  /// <summary>
+  /// 接続文字列からホスト名を抽出します
+  /// </summary>
+  /// <param name="connectionString">接続文字列</param>
+  /// <returns>ホスト名</returns>
+  private string ExtractHostNameFromConnectionString(string connectionString)
+  {
+    if (string.IsNullOrEmpty(connectionString))
+    {
+      throw new ArgumentException("接続文字列が指定されていません", nameof(connectionString));
+    }
+
+    // 接続文字列からHostNameを抽出
+    var parts = connectionString.Split(';');
+    foreach (var part in parts)
+    {
+      if (part.StartsWith("HostName=", StringComparison.OrdinalIgnoreCase))
+      {
+        return part.Substring("HostName=".Length);
+      }
+    }
+
+    throw new ArgumentException("接続文字列にHostNameが含まれていません", nameof(connectionString));
   }
 
   /// <summary>
@@ -438,63 +475,108 @@ public class IoTHubService : IIoTHubService, IDisposable
   }
 
   /// <summary>
-  /// 接続文字列からホスト名を取得します
+  /// マネージドリソースを解放します
   /// </summary>
-  /// <param name="connectionString">接続文字列</param>
-  /// <returns>ホスト名</returns>
-  private string GetHostNameFromConnectionString(string connectionString)
+  protected override void ReleaseManagedResources()
   {
-    var parts = connectionString.Split(';');
-    foreach (var part in parts)
-    {
-      var keyValue = part.Split('=', 2);
-      if (keyValue.Length == 2 && keyValue[0].Trim().Equals("HostName", StringComparison.OrdinalIgnoreCase))
-      {
-        return keyValue[1].Trim();
-      }
-    }
-    throw new ArgumentException("接続文字列にHostNameが含まれていません", nameof(connectionString));
-  }
+    _logger.LogInformation("IoTHubServiceのリソースを解放します");
 
-  /// <summary>
-  /// リソースを破棄します
-  /// </summary>
-  public void Dispose()
-  {
-    Dispose(true);
-    GC.SuppressFinalize(this);
-  }
-
-  /// <summary>
-  /// リソースを破棄します
-  /// </summary>
-  /// <param name="disposing">マネージドリソースを破棄するかどうか</param>
-  protected virtual void Dispose(bool disposing)
-  {
-    if (_disposed)
+    try
     {
-      return;
-    }
-
-    if (disposing)
-    {
-      // マネージドリソースの破棄
       if (_deviceClient != null)
       {
+        // デバイスクライアントを安全に解放
+        // 注意: 同期的な処理のため、非同期操作はタイムアウト付きで実行
         try
         {
-          _deviceClient.Dispose();
-          _deviceClient = null;
+          // 同期処理なため、5秒のタイムアウトを設定
+          using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+          var closeTask = _deviceClient.CloseAsync(cts.Token);
+
+          // GetAwaiter().GetResult()を使用して同期的に待機し、例外を適切に伝播
+          try
+          {
+            _deviceClient.CloseAsync(cts.Token).GetAwaiter().GetResult();
+          }
+          catch (OperationCanceledException)
+          {
+            _logger.LogWarning("IoT Hubクライアントの切断がタイムアウトしました");
+          }
         }
         catch (Exception ex)
         {
-          _logger.LogError(ex, "DeviceClientの破棄中にエラーが発生しました");
+          _logger.LogWarning(ex, "IoT Hubクライアントの切断中にエラーが発生しました");
+        }
+
+        _deviceClient.Dispose();
+        _deviceClient = null;
+      }
+
+      // 接続ロックを解放
+      _connectionLock.Dispose();
+    }
+    catch (Exception ex)
+    {
+      _logger.LogError(ex, "IoTHubServiceのリソース解放中にエラーが発生しました");
+    }
+
+    _connectionState = ConnectionState.Disconnected;
+
+    // 基底クラスのリソース解放を呼び出す
+    base.ReleaseManagedResources();
+  }
+
+  /// <summary>
+  /// リソースのサイズを推定します
+  /// </summary>
+  /// <returns>推定サイズ（バイト単位）</returns>
+  protected override long EstimateResourceSize()
+  {
+    // DeviceClientは比較的大きなリソースとして扱う
+    return 5 * 1024 * 1024; // 5MB
+  }
+
+  /// <summary>
+  /// マネージドリソースを非同期で解放します
+  /// </summary>
+  protected override async ValueTask ReleaseManagedResourcesAsync()
+  {
+    _logger.LogInformation("IoTHubServiceのリソースを非同期で解放します");
+
+    try
+    {
+      // 接続を閉じる
+      if (_deviceClient != null && _connectionState == ConnectionState.Connected)
+      {
+        try
+        {
+          // 非同期で接続を閉じる
+          await _deviceClient.CloseAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+          _logger.LogWarning(ex, "IoT Hub接続の非同期切断中にエラーが発生しました");
         }
       }
 
+      // DeviceClientを破棄
+      if (_deviceClient != null)
+      {
+        _deviceClient.Dispose();
+        _deviceClient = null;
+      }
+
+      // 接続ロックを解放
       _connectionLock.Dispose();
     }
+    catch (Exception ex)
+    {
+      _logger.LogError(ex, "IoTHubServiceのリソース非同期解放中にエラーが発生しました");
+    }
 
-    _disposed = true;
+    _connectionState = ConnectionState.Disconnected;
+
+    // 基底クラスのリソース解放を呼び出す
+    await base.ReleaseManagedResourcesAsync().ConfigureAwait(false);
   }
 }

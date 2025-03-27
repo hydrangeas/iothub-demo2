@@ -1,4 +1,5 @@
 using MachineLog.Collector.Models;
+using MachineLog.Common.Utilities;
 using MachineLog.Common.Synchronization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -10,7 +11,7 @@ namespace MachineLog.Collector.Services;
 /// <summary>
 /// ファイル監視サービスの実装
 /// </summary>
-public class FileWatcherService : IFileWatcherService, IDisposable, IAsyncDisposable
+public class FileWatcherService : AsyncDisposableBase<FileWatcherService>, IFileWatcherService
 {
   private readonly ILogger<FileWatcherService> _logger;
   private readonly CollectorConfig _config;
@@ -20,7 +21,6 @@ public class FileWatcherService : IFileWatcherService, IDisposable, IAsyncDispos
   private readonly ReaderWriterLockSlim _configLock = new ReaderWriterLockSlim(LockRecursionPolicy.SupportsRecursion);
   private readonly AsyncLock _fileOperationLock = new AsyncLock();
   private Timer? _stabilityCheckTimer;
-  private bool _isDisposed;
   private bool _isRunning;
 
   /// <summary>
@@ -45,7 +45,7 @@ public class FileWatcherService : IFileWatcherService, IDisposable, IAsyncDispos
   /// <param name="config">設定</param>
   public FileWatcherService(
       ILogger<FileWatcherService> logger,
-      IOptions<CollectorConfig> config)
+      IOptions<CollectorConfig> config) : base(true) // リソースマネージャーに登録
   {
     _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
@@ -72,8 +72,8 @@ public class FileWatcherService : IFileWatcherService, IDisposable, IAsyncDispos
   /// </summary>
   public Task StartAsync(CancellationToken cancellationToken)
   {
-    if (_isDisposed)
-      throw new ObjectDisposedException(nameof(FileWatcherService));
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
 
     _logger.LogInformation("ファイル監視サービスを開始しています...");
 
@@ -124,7 +124,7 @@ public class FileWatcherService : IFileWatcherService, IDisposable, IAsyncDispos
     }
 
     // ファイル安定性チェック用のタイマーを開始
-    _stabilityCheckTimer = new Timer(CheckFileStability, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    _stabilityCheckTimer = new Timer(CheckFileStability, null, 1000, 1000);
     _isRunning = true;
 
     return Task.CompletedTask;
@@ -135,8 +135,8 @@ public class FileWatcherService : IFileWatcherService, IDisposable, IAsyncDispos
   /// </summary>
   public Task StopAsync(CancellationToken cancellationToken)
   {
-    if (_isDisposed)
-      throw new ObjectDisposedException(nameof(FileWatcherService));
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
 
     _logger.LogInformation("ファイル監視サービスを停止しています...");
 
@@ -175,8 +175,8 @@ public class FileWatcherService : IFileWatcherService, IDisposable, IAsyncDispos
   /// <returns>追加された監視設定の識別子</returns>
   public string AddWatchDirectory(string directoryPath)
   {
-    if (_isDisposed)
-      throw new ObjectDisposedException(nameof(FileWatcherService));
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
 
     if (string.IsNullOrEmpty(directoryPath))
     {
@@ -198,8 +198,8 @@ public class FileWatcherService : IFileWatcherService, IDisposable, IAsyncDispos
   /// <returns>追加された監視設定の識別子</returns>
   public string AddWatchDirectory(DirectoryWatcherConfig config)
   {
-    if (_isDisposed)
-      throw new ObjectDisposedException(nameof(FileWatcherService));
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
 
     if (config == null)
     {
@@ -273,8 +273,8 @@ public class FileWatcherService : IFileWatcherService, IDisposable, IAsyncDispos
   /// <returns>削除に成功したかどうか</returns>
   public bool RemoveWatchDirectory(string directoryId)
   {
-    if (_isDisposed)
-      throw new ObjectDisposedException(nameof(FileWatcherService));
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
 
     if (string.IsNullOrEmpty(directoryId))
     {
@@ -316,8 +316,8 @@ public class FileWatcherService : IFileWatcherService, IDisposable, IAsyncDispos
   /// <returns>削除に成功したかどうか</returns>
   public bool RemoveWatchDirectoryByPath(string directoryPath)
   {
-    if (_isDisposed)
-      throw new ObjectDisposedException(nameof(FileWatcherService));
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
 
     if (string.IsNullOrEmpty(directoryPath))
     {
@@ -351,9 +351,10 @@ public class FileWatcherService : IFileWatcherService, IDisposable, IAsyncDispos
   /// <returns>監視設定のリスト</returns>
   public IReadOnlyList<DirectoryWatcherConfig> GetWatchDirectories()
   {
-    if (_isDisposed)
-      throw new ObjectDisposedException(nameof(FileWatcherService));
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
 
+    // スレッドセーフな読み取り
     _configLock.EnterReadLock();
     try
     {
@@ -370,7 +371,8 @@ public class FileWatcherService : IFileWatcherService, IDisposable, IAsyncDispos
   /// </summary>
   private void OnFileCreated(object sender, FileSystemEventArgs e)
   {
-    if (_isDisposed)
+    // オブジェクトが破棄済みの場合は処理をスキップ
+    if (_disposed)
       return;
 
     _logger.LogDebug("ファイル作成イベントを検出しました: {FilePath}", e.FullPath);
@@ -402,7 +404,8 @@ public class FileWatcherService : IFileWatcherService, IDisposable, IAsyncDispos
   /// </summary>
   private void OnFileChanged(object sender, FileSystemEventArgs e)
   {
-    if (_isDisposed)
+    // オブジェクトが破棄済みの場合は処理をスキップ
+    if (_disposed)
       return;
 
     _logger.LogDebug("ファイル変更イベントを検出しました: {FilePath}", e.FullPath);
@@ -432,13 +435,14 @@ public class FileWatcherService : IFileWatcherService, IDisposable, IAsyncDispos
   /// <summary>
   /// ファイルの安定性をチェックするメソッド
   /// </summary>
-  private Task CheckFileStability(object? state)
+  private void CheckFileStability(object? state)
   {
-    if (_isDisposed)
-      return Task.CompletedTask;
+    // オブジェクトが破棄済みの場合は処理をスキップ
+    if (_disposed)
+      return;
 
     // 非同期メソッドを同期的に開始し、例外を適切に処理
-    return CheckFileStabilityInternalAsync(CancellationToken.None);
+    _ = CheckFileStabilityInternalAsync(CancellationToken.None);
   }
 
   /// <summary>
@@ -451,81 +455,81 @@ public class FileWatcherService : IFileWatcherService, IDisposable, IAsyncDispos
       // 非同期ロックを使用して同時実行を防止
       using (await _fileOperationLock.LockAsync(cancellationToken))
       {
-      try
-      {
-        var now = DateTime.UtcNow;
-        var stabilizationPeriod = TimeSpan.FromSeconds(_config.StabilizationPeriodSeconds);
-        var filesToRemove = new List<string>();
-
-        // 並列処理の最適化
-        var fileCheckTasks = new List<Task<(string FilePath, bool IsStable)>>();
-
-        // 各ファイルの安定性を並列でチェック
-        foreach (var file in _processingFiles)
+        try
         {
-          var lastModified = file.Value;
-          var timeSinceLastModification = now - lastModified;
+          var now = DateTime.UtcNow;
+          var stabilizationPeriod = TimeSpan.FromSeconds(_config.StabilizationPeriodSeconds);
+          var filesToRemove = new List<string>();
 
-          if (timeSinceLastModification >= stabilizationPeriod)
+          // 並列処理の最適化
+          var fileCheckTasks = new List<Task<(string FilePath, bool IsStable)>>();
+
+          // 各ファイルの安定性を並列でチェック
+          foreach (var file in _processingFiles)
           {
-            var filePath = file.Key;
-            fileCheckTasks.Add(Task.Run(async () =>
+            var lastModified = file.Value;
+            var timeSinceLastModification = now - lastModified;
+
+            if (timeSinceLastModification >= stabilizationPeriod)
             {
-              try
+              var filePath = file.Key;
+              fileCheckTasks.Add(Task.Run(async () =>
               {
-                // ファイルが存在し、アクセス可能かチェック
-                bool isStable = await IsFileAccessibleAsync(filePath);
-                return (filePath, isStable);
-              }
-              catch (Exception ex)
-              {
-                _logger.LogWarning(ex, "ファイルの安定性チェック中にエラーが発生しました: {FilePath}", filePath);
-                return (filePath, false);
-              }
-            }));
-          }
-        }
-
-        // すべてのチェックが完了するのを待機
-        if (fileCheckTasks.Count > 0)
-        {
-          var results = await Task.WhenAll(fileCheckTasks);
-
-          // 安定したファイルを処理
-          foreach (var result in results)
-          {
-            if (result.IsStable)
-            {
-              _logger.LogDebug("ファイルが安定しました: {FilePath}", result.FilePath);
-
-              try
-              {
-                // ファイル安定化イベントを発火
-                FileStabilized?.Invoke(this, new FileSystemEventArgs(
-                    WatcherChangeTypes.Changed,
-                    Path.GetDirectoryName(result.FilePath) ?? string.Empty,
-                    Path.GetFileName(result.FilePath)));
-              }
-              catch (Exception ex)
-              {
-                _logger.LogError(ex, "ファイル安定化イベントの処理中にエラーが発生しました: {FilePath}", result.FilePath);
-              }
-
-              filesToRemove.Add(result.FilePath);
+                try
+                {
+                  // ファイルが存在し、アクセス可能かチェック
+                  bool isStable = await IsFileAccessibleAsync(filePath);
+                  return (filePath, isStable);
+                }
+                catch (Exception ex)
+                {
+                  _logger.LogWarning(ex, "ファイルの安定性チェック中にエラーが発生しました: {FilePath}", filePath);
+                  return (filePath, false);
+                }
+              }));
             }
           }
 
-          // 処理済みのファイルをリストから削除
-          foreach (var file in filesToRemove)
+          // すべてのチェックが完了するのを待機
+          if (fileCheckTasks.Count > 0)
           {
-            _processingFiles.TryRemove(file, out _);
+            var results = await Task.WhenAll(fileCheckTasks);
+
+            // 安定したファイルを処理
+            foreach (var result in results)
+            {
+              if (result.IsStable)
+              {
+                _logger.LogDebug("ファイルが安定しました: {FilePath}", result.FilePath);
+
+                try
+                {
+                  // ファイル安定化イベントを発火
+                  FileStabilized?.Invoke(this, new FileSystemEventArgs(
+                      WatcherChangeTypes.Changed,
+                      Path.GetDirectoryName(result.FilePath) ?? string.Empty,
+                      Path.GetFileName(result.FilePath)));
+                }
+                catch (Exception ex)
+                {
+                  _logger.LogError(ex, "ファイル安定化イベントの処理中にエラーが発生しました: {FilePath}", result.FilePath);
+                }
+
+                filesToRemove.Add(result.FilePath);
+              }
+            }
+
+            // 処理済みのファイルをリストから削除
+            foreach (var file in filesToRemove)
+            {
+              _processingFiles.TryRemove(file, out _);
+            }
           }
         }
-      }
-      catch (Exception ex)
-      {
-        _logger.LogError(ex, "ファイル安定性チェック処理中に予期しないエラーが発生しました");
-      }
+        catch (Exception ex)
+        {
+          _logger.LogError(ex, "ファイル安定性チェック処理中に予期しないエラーが発生しました");
+        }
       }
     }
     catch (Exception ex)
@@ -560,7 +564,7 @@ public class FileWatcherService : IFileWatcherService, IDisposable, IAsyncDispos
       // 実際に読み取りを試みる
       var buffer = new byte[1];
       await stream.ReadAsync(buffer, 0, 1);
-      
+
       return true;
     }
     catch (IOException)
@@ -576,71 +580,122 @@ public class FileWatcherService : IFileWatcherService, IDisposable, IAsyncDispos
   }
 
   /// <summary>
-  /// リソースを非同期で解放します
+  /// リソースのサイズを推定します
   /// </summary>
-  public async ValueTask DisposeAsync()
+  /// <returns>推定サイズ（バイト単位）</returns>
+  protected override long EstimateResourceSize()
   {
-    await DisposeAsyncCore();
-    Dispose(false);
-    GC.SuppressFinalize(this);
+    // FileSystemWatcherやTimerなどのリソースを考慮
+    return 2 * 1024 * 1024; // 2MB
   }
 
   /// <summary>
-  /// リソースを非同期で解放する内部実装
+  /// マネージドリソースを解放します
   /// </summary>
-  protected virtual async ValueTask DisposeAsyncCore()
+  protected override void ReleaseManagedResources()
   {
-    if (_isDisposed)
-      return;
+    _logger.LogInformation("FileWatcherServiceのリソースを解放します");
 
-    // 実行中の場合は停止
-    if (_isRunning)
+    try
     {
-      await StopAsync(CancellationToken.None);
-    }
-  }
-
-  /// <summary>
-  /// リソースを解放します
-  /// </summary>
-  public void Dispose()
-  {
-    Dispose(true);
-    GC.SuppressFinalize(this);
-  }
-
-  /// <summary>
-  /// リソースを解放します
-  /// </summary>
-  protected virtual void Dispose(bool disposing)
-  {
-    if (_isDisposed)
-    {
-      return;
-    }
-
-    if (disposing)
-    {
-      _configLock.EnterWriteLock();
-      try
+      // 監視中のファイルウォッチャーをすべて解放
+      foreach (var watcherEntry in _watchers)
       {
-        foreach (var watcherEntry in _watchers)
+        try
         {
-          watcherEntry.Value.Dispose();
+          var watcher = watcherEntry.Value;
+          watcher.EnableRaisingEvents = false;
+          watcher.Created -= OnFileCreated;
+          watcher.Changed -= OnFileChanged;
+          watcher.Dispose();
         }
-
-        _watchers.Clear();
-        _stabilityCheckTimer?.Dispose();
+        catch (Exception ex)
+        {
+          _logger.LogWarning(ex, "FileSystemWatcherの解放中にエラーが発生しました: {WatcherId}", watcherEntry.Key);
+        }
       }
-      finally
+
+      _watchers.Clear();
+
+      // タイマーの停止と解放
+      if (_stabilityCheckTimer != null)
       {
-        _configLock.ExitWriteLock();
+        _stabilityCheckTimer.Change(Timeout.Infinite, Timeout.Infinite);
+        _stabilityCheckTimer.Dispose();
+        _stabilityCheckTimer = null;
       }
 
+      // 内部コレクションのクリア
+      _processingFiles.Clear();
+      _directoryConfigs.Clear();
+
+      // ロックの解放
       _configLock.Dispose();
       _fileOperationLock.Dispose();
     }
+    catch (Exception ex)
+    {
+      _logger.LogError(ex, "FileWatcherServiceのリソース解放中にエラーが発生しました");
+    }
 
-    _isDisposed = true;
+    _isRunning = false;
+
+    // 基底クラスの処理を呼び出す
+    base.ReleaseManagedResources();
+  }
+
+  /// <summary>
+  /// マネージドリソースを非同期で解放します
+  /// </summary>
+  protected override async ValueTask ReleaseManagedResourcesAsync()
+  {
+    _logger.LogInformation("FileWatcherServiceのリソースを非同期で解放します");
+
+    try
+    {
+      // 監視中のファイルウォッチャーをすべて解放
+      foreach (var watcherEntry in _watchers)
+      {
+        try
+        {
+          var watcher = watcherEntry.Value;
+          watcher.EnableRaisingEvents = false;
+          watcher.Created -= OnFileCreated;
+          watcher.Changed -= OnFileChanged;
+          watcher.Dispose();
+        }
+        catch (Exception ex)
+        {
+          _logger.LogWarning(ex, "FileSystemWatcherの非同期解放中にエラーが発生しました: {WatcherId}", watcherEntry.Key);
+        }
+      }
+
+      _watchers.Clear();
+
+      // タイマーの停止と解放
+      if (_stabilityCheckTimer != null)
+      {
+        _stabilityCheckTimer.Change(Timeout.Infinite, Timeout.Infinite);
+        _stabilityCheckTimer.Dispose();
+        _stabilityCheckTimer = null;
+      }
+
+      // 内部コレクションのクリア
+      _processingFiles.Clear();
+      _directoryConfigs.Clear();
+
+      // ロックの解放
+      _configLock.Dispose();
+      _fileOperationLock.Dispose();
+    }
+    catch (Exception ex)
+    {
+      _logger.LogError(ex, "FileWatcherServiceのリソース非同期解放中にエラーが発生しました");
+    }
+
+    _isRunning = false;
+
+    // 基底クラスの処理を呼び出す
+    await base.ReleaseManagedResourcesAsync().ConfigureAwait(false);
   }
 }

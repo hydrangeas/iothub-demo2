@@ -1,5 +1,6 @@
 using MachineLog.Collector.Models;
 using MachineLog.Common.Models;
+using MachineLog.Common.Utilities;
 using MachineLog.Common.Synchronization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -12,7 +13,7 @@ namespace MachineLog.Collector.Services;
 /// <summary>
 /// バッチ処理サービスの実装
 /// </summary>
-public class BatchProcessorService : IBatchProcessorService, IDisposable, IAsyncDisposable
+public class BatchProcessorService : AsyncDisposableBase<BatchProcessorService>, IBatchProcessorService
 {
   private readonly ILogger<BatchProcessorService> _logger;
   private readonly BatchConfig _config;
@@ -25,7 +26,6 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable, IAsync
   private readonly AsyncLock _processingLock;
   private readonly SemaphoreSlim _batchSizeLock = new SemaphoreSlim(1, 1);
   private readonly ReaderWriterLockSlim _queueLock = new ReaderWriterLockSlim(LockRecursionPolicy.SupportsRecursion);
-  private bool _isDisposed;
 
   /// <summary>
   /// コンストラクタ
@@ -36,7 +36,7 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable, IAsync
   public BatchProcessorService(
       ILogger<BatchProcessorService> logger,
       IOptions<BatchConfig> config,
-      IIoTHubService iotHubService)
+      IIoTHubService iotHubService) : base(true) // リソースマネージャーに登録
   {
     _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
@@ -56,8 +56,8 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable, IAsync
   /// </summary>
   public virtual async Task<bool> AddToBatchAsync(LogEntry entry, CancellationToken cancellationToken = default)
   {
-    if (_isDisposed)
-      throw new ObjectDisposedException(nameof(BatchProcessorService));
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
 
     if (entry == null)
     {
@@ -105,8 +105,8 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable, IAsync
   /// </summary>
   public virtual async Task<bool> AddRangeToBatchAsync(IEnumerable<LogEntry> entries, CancellationToken cancellationToken = default)
   {
-    if (_isDisposed)
-      throw new ObjectDisposedException(nameof(BatchProcessorService));
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
 
     if (entries == null)
     {
@@ -172,8 +172,8 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable, IAsync
   /// </summary>
   public virtual async Task<BatchProcessingResult> ProcessBatchAsync(bool force = false, CancellationToken cancellationToken = default)
   {
-    if (_isDisposed)
-      throw new ObjectDisposedException(nameof(BatchProcessorService));
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
 
     var result = new BatchProcessingResult
     {
@@ -195,77 +195,77 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable, IAsync
       // 非同期ロックを使用して同時実行を防止
       using (await _processingLock.LockAsync(cancellationToken))
       {
-      var stopwatch = Stopwatch.StartNew();
+        var stopwatch = Stopwatch.StartNew();
 
-      try
-      {
-        // バッチが空で、強制処理でない場合は何もしない
-        if (GetBatchItemCount() == 0 && !force)
-        {
-          _logger.LogDebug("Batch is empty, nothing to process");
-          return result;
-        }
-
-        _logger.LogInformation("Processing batch with {Count} items, {Size} bytes",
-            GetBatchItemCount(), GetBatchSizeBytes());
-
-        // バッチ内のアイテムを取得
-        List<LogEntry> itemsToProcess = new List<LogEntry>();
-        
-        _queueLock.EnterWriteLock();
         try
         {
-          // キューからすべてのアイテムを取得
-          while (_batchQueue.TryDequeue(out var item))
+          // バッチが空で、強制処理でない場合は何もしない
+          if (GetBatchItemCount() == 0 && !force)
           {
-            if (item != null)
-            {
-              itemsToProcess.Add(item);
-            }
+            _logger.LogDebug("Batch is empty, nothing to process");
+            return result;
           }
-          
-          // バッチサイズをリセット
-          Interlocked.Exchange(ref _currentBatchSizeBytes, 0);
+
+          _logger.LogInformation("Processing batch with {Count} items, {Size} bytes",
+              GetBatchItemCount(), GetBatchSizeBytes());
+
+          // バッチ内のアイテムを取得
+          List<LogEntry> itemsToProcess = new List<LogEntry>();
+
+          _queueLock.EnterWriteLock();
+          try
+          {
+            // キューからすべてのアイテムを取得
+            while (_batchQueue.TryDequeue(out var item))
+            {
+              if (item != null)
+              {
+                itemsToProcess.Add(item);
+              }
+            }
+
+            // バッチサイズをリセット
+            Interlocked.Exchange(ref _currentBatchSizeBytes, 0);
+          }
+          finally
+          {
+            _queueLock.ExitWriteLock();
+          }
+
+          // 処理するアイテムがある場合
+          if (itemsToProcess.Count > 0)
+          {
+            result.ProcessedItems = itemsToProcess.Count;
+
+            // 並列処理の最適化（最大同時実行数を設定）
+            int maxDegreeOfParallelism = Math.Min(Environment.ProcessorCount, 4);
+
+            // アイテムを並列処理
+            await SynchronizationUtility.ParallelForEachAsync(
+                itemsToProcess,
+                async (item, ct) =>
+                {
+                  // ここでアイテムごとの処理を実装
+                  // 例: IoT Hubにアップロードなど
+                  await Task.Delay(1, ct); // 実際の処理に置き換える
+                  return true;
+                },
+                maxDegreeOfParallelism,
+                cancellationToken);
+          }
+        }
+        catch (Exception ex)
+        {
+          _logger.LogError(ex, "Error processing batch");
+          result.Success = false;
+          result.ErrorMessage = ex.Message;
+          result.Exception = ex;
         }
         finally
         {
-          _queueLock.ExitWriteLock();
+          stopwatch.Stop();
+          result.ProcessingTimeMs = stopwatch.ElapsedMilliseconds;
         }
-
-        // 処理するアイテムがある場合
-        if (itemsToProcess.Count > 0)
-        {
-          result.ProcessedItems = itemsToProcess.Count;
-          
-          // 並列処理の最適化（最大同時実行数を設定）
-          int maxDegreeOfParallelism = Math.Min(Environment.ProcessorCount, 4);
-          
-          // アイテムを並列処理
-          await SynchronizationUtility.ParallelForEachAsync(
-              itemsToProcess,
-              async (item, ct) =>
-              {
-                // ここでアイテムごとの処理を実装
-                // 例: IoT Hubにアップロードなど
-                await Task.Delay(1, ct); // 実際の処理に置き換える
-                return true;
-              },
-              maxDegreeOfParallelism,
-              cancellationToken);
-        }
-      }
-      catch (Exception ex)
-      {
-        _logger.LogError(ex, "Error processing batch");
-        result.Success = false;
-        result.ErrorMessage = ex.Message;
-        result.Exception = ex;
-      }
-      finally
-      {
-        stopwatch.Stop();
-        result.ProcessingTimeMs = stopwatch.ElapsedMilliseconds;
-      }
       }
     }
     finally
@@ -285,8 +285,8 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable, IAsync
   /// </summary>
   public virtual async Task StartAsync(CancellationToken cancellationToken = default)
   {
-    if (_isDisposed)
-      throw new ObjectDisposedException(nameof(BatchProcessorService));
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
 
     if (_isProcessing)
     {
@@ -354,8 +354,8 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable, IAsync
   /// </summary>
   public virtual async Task StopAsync(CancellationToken cancellationToken = default)
   {
-    if (_isDisposed)
-      throw new ObjectDisposedException(nameof(BatchProcessorService));
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
 
     if (!_isProcessing)
     {
@@ -379,7 +379,7 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable, IAsync
         // 外部のキャンセルトークンを考慮
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cancellationToken);
-        
+
         try
         {
           await ProcessBatchAsync(true, linkedCts.Token);
@@ -394,7 +394,7 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable, IAsync
         var completionTask = _processingTask;
         var timeoutTask = Task.Delay(TimeSpan.FromSeconds(10), cancellationToken);
         var completedTask = await Task.WhenAny(completionTask, timeoutTask);
-        
+
         if (completedTask == timeoutTask && !completionTask.IsCompleted)
         {
           _logger.LogWarning("Batch processing task did not complete within timeout");
@@ -417,8 +417,8 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable, IAsync
   /// <returns>バッチが満杯の場合はtrue</returns>
   public virtual bool IsBatchFull()
   {
-    if (_isDisposed)
-      throw new ObjectDisposedException(nameof(BatchProcessorService));
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
 
     // スレッドセーフな読み取り
     _queueLock.EnterReadLock();
@@ -439,8 +439,8 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable, IAsync
   /// <returns>アイテム数</returns>
   public virtual int GetBatchItemCount()
   {
-    if (_isDisposed)
-      throw new ObjectDisposedException(nameof(BatchProcessorService));
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
 
     // スレッドセーフな読み取り
     _queueLock.EnterReadLock();
@@ -460,8 +460,8 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable, IAsync
   /// <returns>サイズ（バイト）</returns>
   public virtual long GetBatchSizeBytes()
   {
-    if (_isDisposed)
-      throw new ObjectDisposedException(nameof(BatchProcessorService));
+    // オブジェクトが破棄済みの場合は例外をスロー
+    ThrowIfDisposed();
 
     // アトミックな読み取り
     return Interlocked.Read(ref _currentBatchSizeBytes);
@@ -492,57 +492,139 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable, IAsync
   }
 
   /// <summary>
-  /// リソースを非同期で解放します
+  /// リソースのサイズを推定します
   /// </summary>
-  public async ValueTask DisposeAsync()
+  /// <returns>推定サイズ（バイト単位）</returns>
+  protected override long EstimateResourceSize()
   {
-    await DisposeAsyncCore();
-    Dispose(false);
-    GC.SuppressFinalize(this);
+    // バッチプロセッサのリソースサイズを推定
+    return 1 * 1024 * 1024; // 1MB
   }
 
   /// <summary>
-  /// リソースを非同期で解放する内部実装
+  /// マネージドリソースを解放します
   /// </summary>
-  protected virtual async ValueTask DisposeAsyncCore()
+  protected override void ReleaseManagedResources()
   {
-    if (_isDisposed)
-      return;
+    _logger.LogInformation("BatchProcessorServiceのリソースを解放します");
 
-    // 処理中のタスクを停止
-    if (_isProcessing)
+    try
     {
-      await StopAsync(CancellationToken.None);
-    }
-  }
+      // 処理中のタスクをキャンセル
+      if (!_processingTokenSource.IsCancellationRequested)
+      {
+        _processingTokenSource.Cancel();
+      }
 
-  /// <summary>
-  /// リソースを解放します
-  /// </summary>
-  public void Dispose()
-  {
-    Dispose(true);
-    GC.SuppressFinalize(this);
-  }
+      // 残りのバッチを同期的に処理
+      try
+      {
+        if (_isProcessing && _processingTask != null)
+        {
+          // 非同期処理を同期的に実行
+          Task.Run(async () =>
+          {
+            // 非同期的にバッチを処理
+            await ProcessBatchAsync(true, CancellationToken.None);
 
-  /// <summary>
-  /// リソースを解放します
-  /// </summary>
-  /// <param name="disposing">マネージドリソースを破棄するかどうか</param>
-  protected virtual void Dispose(bool disposing)
-  {
-    if (_isDisposed)
-      return;
+            // タスクが完了するまで短時間待機
+            await Task.WhenAny(_processingTask, Task.Delay(TimeSpan.FromSeconds(3)));
+          }).Wait(TimeSpan.FromSeconds(5));
 
-    if (disposing)
-    {
-      // マネージドリソースの破棄
+          if (_processingTask != null && !_processingTask.IsCompleted)
+          {
+            _logger.LogWarning("タスク完了待機がタイムアウトしました");
+          }
+        }
+      }
+      catch (Exception ex)
+      {
+        _logger.LogWarning(ex, "残りのバッチの解放中にエラーが発生しました");
+      }
+
+      // リソースの解放
       _processingTokenSource.Dispose();
       _batchSizeLock.Dispose();
       _queueLock.Dispose();
       _processingLock.Dispose();
+
+      // キューをクリア
+      while (_batchQueue.TryDequeue(out _)) { }
+      Interlocked.Exchange(ref _currentBatchSizeBytes, 0);
+
+      _isProcessing = false;
+    }
+    catch (Exception ex)
+    {
+      _logger.LogError(ex, "BatchProcessorServiceのリソース解放中にエラーが発生しました");
     }
 
-    _isDisposed = true;
+    // 基底クラスの処理を呼び出す
+    base.ReleaseManagedResources();
+  }
+
+  /// <summary>
+  /// マネージドリソースを非同期で解放します
+  /// </summary>
+  protected override async ValueTask ReleaseManagedResourcesAsync()
+  {
+    _logger.LogInformation("BatchProcessorServiceのリソースを非同期で解放します");
+
+    try
+    {
+      // 処理中のタスクをキャンセル
+      if (!_processingTokenSource.IsCancellationRequested)
+      {
+        _processingTokenSource.Cancel();
+      }
+
+      // 残りのバッチを非同期で処理
+      try
+      {
+        if (_isProcessing && _processingTask != null)
+        {
+          // 残りのバッチを短いタイムアウトで処理
+          using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+          await ProcessBatchAsync(true, cts.Token).ConfigureAwait(false);
+
+          // タスクが完了するまで待機
+          var timeoutTask = Task.Delay(TimeSpan.FromSeconds(5));
+          await Task.WhenAny(_processingTask, timeoutTask).ConfigureAwait(false);
+
+          if (!_processingTask.IsCompleted)
+          {
+            _logger.LogWarning("非同期タスクの完了待機がタイムアウトしました");
+          }
+        }
+      }
+      catch (OperationCanceledException)
+      {
+        // タイムアウトは正常な動作
+        _logger.LogInformation("バッチ処理のキャンセルが成功しました");
+      }
+      catch (Exception ex)
+      {
+        _logger.LogWarning(ex, "残りのバッチの非同期解放中にエラーが発生しました");
+      }
+
+      // リソースの解放
+      _processingTokenSource.Dispose();
+      _batchSizeLock.Dispose();
+      _queueLock.Dispose();
+      _processingLock.Dispose();
+
+      // キューをクリア
+      while (_batchQueue.TryDequeue(out _)) { }
+      Interlocked.Exchange(ref _currentBatchSizeBytes, 0);
+
+      _isProcessing = false;
+    }
+    catch (Exception ex)
+    {
+      _logger.LogError(ex, "BatchProcessorServiceのリソース非同期解放中にエラーが発生しました");
+    }
+
+    // 基底クラスの処理を呼び出す
+    await base.ReleaseManagedResourcesAsync().ConfigureAwait(false);
   }
 }
