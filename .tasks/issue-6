@@ -52,3 +52,6 @@ LogEntryオブジェクトをバッチとして効率的に処理するための
   - BatchQueue.csに_countフィールドを追加し、キューの要素数を追跡
   - EnqueueAsync、EnqueueRangeAsync、DequeueAsync、DequeueMultipleAsyncメソッドで_countを更新
   - IsEmptyとCountプロパティを_countフィールドを使用するように修正
+- 2025/03/27: 構文エラーの修正
+  - BatchProcessingExample.csでバッチ処理のオプション設定のカンマの修正
+  - LogEntryBatchProcessor.cs内のメソッド引数間のカンマの追加
