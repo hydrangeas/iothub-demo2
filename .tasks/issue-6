@@ -46,3 +46,9 @@ LogEntryオブジェクトをバッチとして効率的に処理するための
 - 2025/03/27: PR#30に対するレビューコメントへの対応
   - バッチタイマーコールバックとアイドルタイムアウトコールバックの2つのasync voidメソッドにtry-catch例外処理を追加
   - PR説明のマークダウン改行問題を修正（\n文字列を実際の改行に置換）
+- 2025/03/27: PR#30に対する追加レビューコメントへの対応
+  - BatchProcessorBase.csに_processingTaskフィールドを追加し、Task.Runの結果を格納
+  - StopAsyncメソッドで_processingTaskを待機するように修正
+  - BatchQueue.csに_countフィールドを追加し、キューの要素数を追跡
+  - EnqueueAsync、EnqueueRangeAsync、DequeueAsync、DequeueMultipleAsyncメソッドで_countを更新
+  - IsEmptyとCountプロパティを_countフィールドを使用するように修正
