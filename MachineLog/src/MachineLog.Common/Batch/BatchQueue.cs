@@ -15,6 +15,7 @@ public class BatchQueue<T> where T : class
   private readonly Channel<T> _channel;
   private readonly int _capacity;
   private readonly CancellationTokenSource _cts;
+  private int _count;
 
   /// <summary>
   /// バッチキューを初期化する
@@ -45,6 +46,7 @@ public class BatchQueue<T> where T : class
     try
     {
       await _channel.Writer.WriteAsync(item, _cts.Token);
+      Interlocked.Increment(ref _count);
       return true;
     }
     catch (OperationCanceledException)
@@ -69,6 +71,7 @@ public class BatchQueue<T> where T : class
       foreach (var item in items)
       {
         await _channel.Writer.WriteAsync(item, _cts.Token);
+        Interlocked.Increment(ref _count);
       }
       return true;
     }
@@ -90,7 +93,9 @@ public class BatchQueue<T> where T : class
   {
     try
     {
-      return await _channel.Reader.ReadAsync(_cts.Token);
+      var item = await _channel.Reader.ReadAsync(_cts.Token);
+      Interlocked.Decrement(ref _count);
+      return item;
     }
     catch (OperationCanceledException)
     {
@@ -121,6 +126,7 @@ public class BatchQueue<T> where T : class
         if (_channel.Reader.TryRead(out var item))
         {
           result.Add(item);
+          Interlocked.Decrement(ref _count);
         }
         else
         {
@@ -131,6 +137,7 @@ public class BatchQueue<T> where T : class
               if (_channel.Reader.TryRead(out item))
               {
                 result.Add(item);
+                Interlocked.Decrement(ref _count);
               }
             }
             else
@@ -158,12 +165,12 @@ public class BatchQueue<T> where T : class
   /// キューが空かどうかを確認する
   /// </summary>
   /// <returns>キューが空の場合はtrue、それ以外の場合はfalse</returns>
-  public bool IsEmpty => _channel.Reader.Count == 0;
+  public bool IsEmpty => _count == 0;
 
   /// <summary>
   /// キューに格納されているアイテムの数を取得する
   /// </summary>
-  public int Count => _channel.Reader.Count;
+  public int Count => _count;
 
   /// <summary>
   /// キューの容量を取得する

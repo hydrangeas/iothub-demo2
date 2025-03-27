@@ -21,6 +21,7 @@ public abstract class BatchProcessorBase<T> : IBatchProcessor<T>, IDisposable wh
   private bool _isProcessing;
   private bool _isDisposed;
   private DateTime _lastItemAddedTime;
+  private Task _processingTask;
 
   /// <summary>
   /// バッチ処理の基本クラスを初期化する
@@ -116,7 +117,7 @@ public abstract class BatchProcessorBase<T> : IBatchProcessor<T>, IDisposable wh
         _options.IdleTimeoutInMilliseconds);
 
     // バッチ処理ループを開始
-    Task.Run(ProcessBatchLoopAsync);
+    _processingTask = Task.Run(ProcessBatchLoopAsync);
 
     return Task.FromResult(true);
   }
@@ -139,6 +140,12 @@ public abstract class BatchProcessorBase<T> : IBatchProcessor<T>, IDisposable wh
 
     // キャンセルトークンをキャンセル
     _cts.Cancel();
+
+    // バッチ処理ループが完全に終了するまで待機
+    if (_processingTask != null)
+    {
+      await _processingTask;
+    }
 
     return true;
   }
