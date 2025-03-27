@@ -28,3 +28,20 @@ PR #29に対してレビューアからの指摘事項が2点あり、これに�
    - メソッド名と戻り値の型で目的を明確に区別
 
 変更内容はコミットしてGitHubのPR #29に反映し、レビューコメントへの対応内容をPRにコメントしました。
+
+## 2025/3/27 追加レビューコメントへの対応
+
+PR #29に対して追加のレビューコメントがありました：
+
+### 指摘内容
+
+- **FileProcessorService.cs:71行目**:
+  - `DetectEncodingDetailedAsync`メソッドの名前を`GetEncodingDetectionResultAsync`など、より目的が明確な名前に変更することで、`DetectEncodingAsync`メソッドとの区別をさらに明確にすることが推奨されています。
+
+### 対応内容
+
+- メソッド名を`DetectEncodingDetailedAsync`から`GetEncodingDetectionResultAsync`に変更
+- メソッドのドキュメントコメントも更新し、「検出」ではなく「取得」の概念をより強調
+- これにより、パブリックなインターフェース実装メソッド（シンプルな`Encoding`を返す）と内部用メソッド（詳細な検出結果を返す）の違いが明確になりました
+
+変更内容はコミットしてGitHubのPR #29に反映し、追加のコメントをPRに投稿しました。
