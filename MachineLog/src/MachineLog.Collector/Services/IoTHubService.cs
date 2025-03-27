@@ -1,9 +1,14 @@
 using MachineLog.Collector.Models;
 using Microsoft.Azure.Devices.Client;
+using Microsoft.Azure.Devices.Client.Exceptions;
 using Microsoft.Azure.Devices.Client.Transport;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Polly;
+using Polly.Retry;
 using System.Diagnostics;
+using System.Net.Sockets;
+using System.Text;
 
 namespace MachineLog.Collector.Services;
 
@@ -16,6 +21,9 @@ public class IoTHubService : IIoTHubService, IDisposable
   private readonly IoTHubConfig _config;
   private DeviceClient? _deviceClient;
   private ConnectionState _connectionState;
+  private readonly SemaphoreSlim _connectionLock = new SemaphoreSlim(1, 1);
+  private readonly AsyncRetryPolicy _retryPolicy;
+  private bool _disposed;
 
   /// <summary>
   /// コンストラクタ
@@ -29,6 +37,22 @@ public class IoTHubService : IIoTHubService, IDisposable
     _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
     _connectionState = ConnectionState.Disconnected;
+
+    // リトライポリシーの設定
+    _retryPolicy = Policy
+        .Handle<IotHubException>()
+        .Or<TimeoutException>()
+        .Or<SocketException>()
+        .Or<IOException>()
+        .WaitAndRetryAsync(
+            5, // 最大リトライ回数
+            retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)), // 指数バックオフ
+            (exception, timeSpan, retryCount, context) =>
+            {
+                _logger.LogWarning(exception, 
+                    "IoT Hub操作中にエラーが発生しました。{RetryCount}回目のリトライを{RetryTimeSpan}秒後に実行します。",
+                    retryCount, timeSpan.TotalSeconds);
+            });
   }
 
   /// <summary>
@@ -45,18 +69,40 @@ public class IoTHubService : IIoTHubService, IDisposable
 
     try
     {
-      _logger.LogInformation("IoT Hubに接続を開始します: {DeviceId}", _config.DeviceId);
-      _connectionState = ConnectionState.Connecting;
+      // 同時接続を防ぐためのロック
+      await _connectionLock.WaitAsync(cancellationToken);
 
-      // DeviceClientを作成
-      _deviceClient = await CreateDeviceClientAsync(cancellationToken);
+      try
+      {
+        // 既に接続済みの場合は何もしない
+        if (_connectionState == ConnectionState.Connected && _deviceClient != null)
+        {
+          _logger.LogInformation("既にIoT Hubに接続されています: {DeviceId}", _config.DeviceId);
+          result.Success = true;
+          return result;
+        }
 
-      // 接続を開く
-      await _deviceClient.OpenAsync(cancellationToken);
+        _logger.LogInformation("IoT Hubに接続を開始します: {DeviceId}", _config.DeviceId);
+        _connectionState = ConnectionState.Connecting;
 
-      _connectionState = ConnectionState.Connected;
-      result.Success = true;
-      _logger.LogInformation("IoT Hubに接続しました: {DeviceId}", _config.DeviceId);
+        // DeviceClientを作成
+        _deviceClient = await CreateDeviceClientAsync(cancellationToken);
+
+        // 接続状態変更ハンドラを設定
+        _deviceClient.SetConnectionStatusChangesHandler(ConnectionStatusChangesHandler);
+
+        // 接続を開く
+        await _retryPolicy.ExecuteAsync(async (ct) => 
+            await _deviceClient.OpenAsync(ct), cancellationToken);
+
+        _connectionState = ConnectionState.Connected;
+        result.Success = true;
+        _logger.LogInformation("IoT Hubに接続しました: {DeviceId}", _config.DeviceId);
+      }
+      finally
+      {
+        _connectionLock.Release();
+      }
     }
     catch (Exception ex)
     {
@@ -87,16 +133,27 @@ public class IoTHubService : IIoTHubService, IDisposable
 
     try
     {
-      _logger.LogInformation("IoT Hubから切断します: {DeviceId}", _config.DeviceId);
-      _connectionState = ConnectionState.Disconnecting;
+      await _connectionLock.WaitAsync(cancellationToken);
 
-      // 接続を閉じる
-      await _deviceClient.CloseAsync(cancellationToken);
-      _deviceClient.Dispose();
-      _deviceClient = null;
-      _connectionState = ConnectionState.Disconnected;
+      try
+      {
+        _logger.LogInformation("IoT Hubから切断します: {DeviceId}", _config.DeviceId);
+        _connectionState = ConnectionState.Disconnecting;
 
-      _logger.LogInformation("IoT Hubから切断しました: {DeviceId}", _config.DeviceId);
+        // 接続を閉じる
+        await _retryPolicy.ExecuteAsync(async (ct) => 
+            await _deviceClient.CloseAsync(ct), cancellationToken);
+            
+        _deviceClient.Dispose();
+        _deviceClient = null;
+        _connectionState = ConnectionState.Disconnected;
+
+        _logger.LogInformation("IoT Hubから切断しました: {DeviceId}", _config.DeviceId);
+      }
+      finally
+      {
+        _connectionLock.Release();
+      }
     }
     catch (Exception ex)
     {
@@ -148,7 +205,9 @@ public class IoTHubService : IIoTHubService, IDisposable
       // ファイルをアップロード
       using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read))
       {
-        await UploadFileToIoTHubAsync(fileStream, blobName, cancellationToken);
+        await _retryPolicy.ExecuteAsync(async (ct) => 
+            await UploadFileToIoTHubAsync(fileStream, blobName, ct), 
+            cancellationToken);
       }
 
       result.Success = true;
@@ -185,14 +244,29 @@ public class IoTHubService : IIoTHubService, IDisposable
   /// <returns>DeviceClient</returns>
   protected virtual async Task<DeviceClient> CreateDeviceClientAsync(CancellationToken cancellationToken)
   {
-    // 接続文字列からDeviceClientを作成
-    var deviceClient = DeviceClient.CreateFromConnectionString(
-        _config.ConnectionString,
-        TransportType.Mqtt);
+    DeviceClient deviceClient;
 
-    // 実際のプロジェクトでは、ここでファイルアップロード用の設定を行います
-    // テスト目的のため、簡略化しています
-    await Task.CompletedTask; // 非同期メソッドのため、ダミーのタスクを返す
+    // 認証方法に応じてDeviceClientを作成
+    if (!string.IsNullOrEmpty(_config.SasToken))
+    {
+      // SASトークンを使用した認証
+      _logger.LogInformation("SASトークンを使用してDeviceClientを作成します: {DeviceId}", _config.DeviceId);
+      deviceClient = DeviceClient.Create(
+          GetHostNameFromConnectionString(_config.ConnectionString),
+          new DeviceAuthenticationWithToken(_config.DeviceId, _config.SasToken),
+          TransportType.Mqtt);
+    }
+    else
+    {
+      // 接続文字列を使用した認証
+      _logger.LogInformation("接続文字列を使用してDeviceClientを作成します: {DeviceId}", _config.DeviceId);
+      deviceClient = DeviceClient.CreateFromConnectionString(
+          _config.ConnectionString,
+          TransportType.Mqtt);
+    }
+
+    // 非同期メソッドのため、ダミーのタスクを返す
+    await Task.CompletedTask;
 
     return deviceClient;
   }
@@ -211,16 +285,86 @@ public class IoTHubService : IIoTHubService, IDisposable
       throw new InvalidOperationException("DeviceClientが初期化されていません");
     }
 
-    // アップロード先のパスを構築
-    var uploadPath = Path.Combine(_config.UploadFolderPath, blobName);
+    // 現在の日付に基づいてフォルダ構造を作成 (yyyy/MM/dd/{machineId})
+    var today = DateTime.UtcNow;
+    var folderPath = Path.Combine(
+        _config.UploadFolderPath,
+        today.Year.ToString(),
+        today.Month.ToString("00"),
+        today.Day.ToString("00"),
+        _config.DeviceId);
 
-    // ファイルをアップロード
-    // 実際のプロジェクトでは、ここでIoT Hubにファイルをアップロードします
-    // テスト目的のため、簡略化しています
+    // アップロード先のパスを構築
+    var uploadPath = Path.Combine(folderPath, blobName);
     _logger.LogInformation("ファイルをアップロードします: {Path}, サイズ: {Size} バイト", uploadPath, fileStream.Length);
 
-    // アップロードをシミュレート
-    await Task.Delay(TimeSpan.FromMilliseconds(fileStream.Length / 1024), cancellationToken); // 1KBあたり1ミリ秒
+    // ファイルをアップロード
+    #pragma warning disable CS0618 // Type or member is obsolete
+    await _deviceClient.UploadToBlobAsync(uploadPath, fileStream, cancellationToken);
+    #pragma warning restore CS0618 // Type or member is obsolete
+    
+    _logger.LogInformation("ファイルのアップロードが完了しました: {Path}", uploadPath);
+  }
+
+  /// <summary>
+  /// 接続状態変更ハンドラ
+  /// </summary>
+  /// <param name="status">接続状態</param>
+  /// <param name="reason">変更理由</param>
+  private void ConnectionStatusChangesHandler(ConnectionStatus status, ConnectionStatusChangeReason reason)
+  {
+    _logger.LogInformation("IoT Hub接続状態が変更されました: {Status}, 理由: {Reason}", status, reason);
+
+    switch (status)
+    {
+      case ConnectionStatus.Connected:
+        _connectionState = ConnectionState.Connected;
+        break;
+      case ConnectionStatus.Disconnected:
+        _connectionState = ConnectionState.Disconnected;
+        break;
+      case ConnectionStatus.Disabled:
+        _connectionState = ConnectionState.Error;
+        break;
+    }
+
+    // 一時的なエラーの場合は自動的に再接続を試みる
+    if (status == ConnectionStatus.Disconnected &&
+        (reason == ConnectionStatusChangeReason.Communication_Error ||
+         reason == ConnectionStatusChangeReason.Connection_Ok))
+    {
+      _logger.LogWarning("一時的な接続エラーが発生しました。再接続を試みます。");
+      Task.Run(async () =>
+      {
+        try
+        {
+          await ConnectAsync();
+        }
+        catch (Exception ex)
+        {
+          _logger.LogError(ex, "自動再接続中にエラーが発生しました");
+        }
+      });
+    }
+  }
+
+  /// <summary>
+  /// 接続文字列からホスト名を取得します
+  /// </summary>
+  /// <param name="connectionString">接続文字列</param>
+  /// <returns>ホスト名</returns>
+  private string GetHostNameFromConnectionString(string connectionString)
+  {
+    var parts = connectionString.Split(';');
+    foreach (var part in parts)
+    {
+      var keyValue = part.Split('=', 2);
+      if (keyValue.Length == 2 && keyValue[0].Trim().Equals("HostName", StringComparison.OrdinalIgnoreCase))
+      {
+        return keyValue[1].Trim();
+      }
+    }
+    throw new ArgumentException("接続文字列にHostNameが含まれていません", nameof(connectionString));
   }
 
   /// <summary>
@@ -238,6 +382,11 @@ public class IoTHubService : IIoTHubService, IDisposable
   /// <param name="disposing">マネージドリソースを破棄するかどうか</param>
   protected virtual void Dispose(bool disposing)
   {
+    if (_disposed)
+    {
+      return;
+    }
+
     if (disposing)
     {
       // マネージドリソースの破棄
@@ -253,6 +402,10 @@ public class IoTHubService : IIoTHubService, IDisposable
           _logger.LogError(ex, "DeviceClientの破棄中にエラーが発生しました");
         }
       }
+
+      _connectionLock.Dispose();
     }
+
+    _disposed = true;
   }
 }

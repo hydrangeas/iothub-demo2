@@ -49,6 +49,12 @@ public static class ServiceCollectionExtensions
     services.AddTransient<JsonLineProcessor>();
     services.AddTransient<IFileProcessorService, FileProcessorService>();
 
+    // IoT Hubサービスの登録
+    services.AddSingleton<IIoTHubService, IoTHubService>();
+
+    // バッチ処理サービスの登録
+    services.AddSingleton<IBatchProcessorService, BatchProcessorService>();
+
     // バリデーターの登録
     services.AddTransient<FluentValidation.IValidator<MachineLog.Common.Models.LogEntry>, MachineLog.Common.Validation.LogEntryValidator>();
 
