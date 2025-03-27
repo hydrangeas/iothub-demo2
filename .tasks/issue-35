@@ -1,0 +1,7 @@
+# Issue #35: MachineLog.Collectorのリファクタリング
+
+## 2025/3/27
+
+- リファクタリング計画を立案
+- GitHub Issue #35を作成
+- 作業用ブランチfeature/issue-35-refactor-machinelog-collectorを作成

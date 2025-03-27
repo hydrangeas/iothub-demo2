@@ -93,7 +93,7 @@ public class FileRetentionService : IFileRetentionService
             try
             {
               var archiveDir = Path.GetDirectoryName(archivePath);
-              if (!Directory.Exists(archiveDir))
+              if (!string.IsNullOrEmpty(archiveDir) && !Directory.Exists(archiveDir))
               {
                 Directory.CreateDirectory(archiveDir);
               }
@@ -222,7 +222,15 @@ public class FileRetentionService : IFileRetentionService
   {
     try
     {
-      var driveInfo = new DriveInfo(Path.GetPathRoot(directoryPath));
+      // ドライブルートパスを取得し、nullチェック
+      string? rootPath = Path.GetPathRoot(directoryPath);
+      if (string.IsNullOrEmpty(rootPath))
+      {
+        _logger.LogWarning("有効なドライブルートパスを取得できませんでした: {DirectoryPath}", directoryPath);
+        return Task.FromResult(false);
+      }
+
+      var driveInfo = new DriveInfo(rootPath);
       var availableSpacePercentage = (double)driveInfo.AvailableFreeSpace / driveInfo.TotalSize;
 
       _logger.LogInformation(

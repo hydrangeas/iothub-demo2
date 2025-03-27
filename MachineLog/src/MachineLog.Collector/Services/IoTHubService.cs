@@ -49,9 +49,9 @@ public class IoTHubService : IIoTHubService, IDisposable
             retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)), // 指数バックオフ
             (exception, timeSpan, retryCount, context) =>
             {
-                _logger.LogWarning(exception, 
-                    "IoT Hub操作中にエラーが発生しました。{RetryCount}回目のリトライを{RetryTimeSpan}秒後に実行します。",
-                    retryCount, timeSpan.TotalSeconds);
+              _logger.LogWarning(exception,
+                  "IoT Hub操作中にエラーが発生しました。{RetryCount}回目のリトライを{RetryTimeSpan}秒後に実行します。",
+                  retryCount, timeSpan.TotalSeconds);
             });
   }
 
@@ -92,7 +92,7 @@ public class IoTHubService : IIoTHubService, IDisposable
         _deviceClient.SetConnectionStatusChangesHandler(ConnectionStatusChangesHandler);
 
         // 接続を開く
-        await _retryPolicy.ExecuteAsync(async (ct) => 
+        await _retryPolicy.ExecuteAsync(async (ct) =>
             await _deviceClient.OpenAsync(ct), cancellationToken);
 
         _connectionState = ConnectionState.Connected;
@@ -141,9 +141,9 @@ public class IoTHubService : IIoTHubService, IDisposable
         _connectionState = ConnectionState.Disconnecting;
 
         // 接続を閉じる
-        await _retryPolicy.ExecuteAsync(async (ct) => 
+        await _retryPolicy.ExecuteAsync(async (ct) =>
             await _deviceClient.CloseAsync(ct), cancellationToken);
-            
+
         _deviceClient.Dispose();
         _deviceClient = null;
         _connectionState = ConnectionState.Disconnected;
@@ -205,8 +205,8 @@ public class IoTHubService : IIoTHubService, IDisposable
       // ファイルをアップロード
       using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read))
       {
-        await _retryPolicy.ExecuteAsync(async (ct) => 
-            await UploadFileToIoTHubAsync(fileStream, blobName, ct), 
+        await _retryPolicy.ExecuteAsync(async (ct) =>
+            await UploadFileToIoTHubAsync(fileStream, blobName, ct),
             cancellationToken);
       }
 
@@ -298,10 +298,8 @@ public class IoTHubService : IIoTHubService, IDisposable
     var uploadPath = Path.Combine(folderPath, blobName);
     _logger.LogInformation("ファイルをアップロードします: {Path}, サイズ: {Size} バイト", uploadPath, fileStream.Length);
 
-    // ファイルをアップロード
-    // 新しいUploadToBlobAsyncメソッドを使用
+    // UploadToBlobAsyncを使用（問題が解決するまで一時的対応）
     await _deviceClient.UploadToBlobAsync(uploadPath, fileStream);
-    
     _logger.LogInformation("ファイルのアップロードが完了しました: {Path}", uploadPath);
   }
 

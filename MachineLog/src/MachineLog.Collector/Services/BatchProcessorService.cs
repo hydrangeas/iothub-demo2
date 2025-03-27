@@ -143,11 +143,17 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable
     _logger.LogInformation("Starting batch processor");
     _isProcessing = true;
 
+    // 非同期メソッドの待機を確実にするため、TaskCompletionSourceを使用
+    var tcs = new TaskCompletionSource<bool>();
+
     // 定期的なバッチ処理タスクを開始
     _processingTask = Task.Run(async () =>
     {
       try
       {
+        // 開始をシグナル
+        tcs.TrySetResult(true);
+
         while (!_processingTokenSource.Token.IsCancellationRequested)
         {
           await ProcessBatchAsync(true, _processingTokenSource.Token);
@@ -157,16 +163,21 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable
       catch (OperationCanceledException)
       {
         _logger.LogInformation("Batch processing task was cancelled");
+        tcs.TrySetCanceled();
       }
       catch (Exception ex)
       {
         _logger.LogError(ex, "Error in batch processing task");
+        tcs.TrySetException(ex);
       }
       finally
       {
         _isProcessing = false;
       }
     }, _processingTokenSource.Token);
+
+    // タスクの開始を待機（タスクそのものの完了ではなく、初期化完了を待つ）
+    await tcs.Task;
   }
 
   /// <summary>

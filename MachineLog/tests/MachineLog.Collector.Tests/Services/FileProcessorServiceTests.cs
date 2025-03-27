@@ -22,6 +22,8 @@ public class FileProcessorServiceTests : UnitTestBase
   private readonly Mock<ILogger<FileProcessorService>> _loggerMock;
   private readonly Mock<IOptions<CollectorConfig>> _optionsMock;
   private readonly Mock<IValidator<LogEntry>> _validatorMock;
+  private readonly Mock<JsonLineProcessor> _jsonProcessorMock;
+  private readonly Mock<EncodingDetector> _encodingDetectorMock;
   private readonly CollectorConfig _config;
   private readonly string _testDirectory;
 
@@ -29,6 +31,8 @@ public class FileProcessorServiceTests : UnitTestBase
   {
     _loggerMock = new Mock<ILogger<FileProcessorService>>();
     _validatorMock = new Mock<IValidator<LogEntry>>();
+    _jsonProcessorMock = new Mock<JsonLineProcessor>();
+    _encodingDetectorMock = new Mock<EncodingDetector>();
 
     _config = new CollectorConfig
     {
@@ -75,7 +79,12 @@ public class FileProcessorServiceTests : UnitTestBase
   public async Task ProcessFileAsync_WithValidJsonLines_ProcessesSuccessfully()
   {
     // Arrange
-    var service = new FileProcessorService(_loggerMock.Object, _optionsMock.Object, _validatorMock.Object);
+    var service = new FileProcessorService(
+        _loggerMock.Object,
+        _optionsMock.Object,
+        _validatorMock.Object,
+        _jsonProcessorMock.Object,
+        _encodingDetectorMock.Object);
     var testFilePath = Path.Combine(_testDirectory, "valid.jsonl");
 
     // 有効なJSONLinesファイルを作成
@@ -107,7 +116,12 @@ public class FileProcessorServiceTests : UnitTestBase
   public async Task ProcessFileAsync_WithInvalidJson_ReturnsPartialSuccess()
   {
     // Arrange
-    var service = new FileProcessorService(_loggerMock.Object, _optionsMock.Object, _validatorMock.Object);
+    var service = new FileProcessorService(
+        _loggerMock.Object,
+        _optionsMock.Object,
+        _validatorMock.Object,
+        _jsonProcessorMock.Object,
+        _encodingDetectorMock.Object);
     var testFilePath = Path.Combine(_testDirectory, "mixed.jsonl");
 
     // 有効なJSONと無効なJSONが混在するファイルを作成
@@ -138,7 +152,12 @@ public class FileProcessorServiceTests : UnitTestBase
   public async Task ProcessFileAsync_WithValidationErrors_FiltersInvalidEntries()
   {
     // Arrange
-    var service = new FileProcessorService(_loggerMock.Object, _optionsMock.Object, _validatorMock.Object);
+    var service = new FileProcessorService(
+        _loggerMock.Object,
+        _optionsMock.Object,
+        _validatorMock.Object,
+        _jsonProcessorMock.Object,
+        _encodingDetectorMock.Object);
     var testFilePath = Path.Combine(_testDirectory, "validation_errors.jsonl");
 
     // バリデーションエラーを設定
@@ -183,7 +202,12 @@ public class FileProcessorServiceTests : UnitTestBase
   public async Task DetectEncodingAsync_WithUtf8File_ReturnsUtf8Encoding()
   {
     // Arrange
-    var service = new FileProcessorService(_loggerMock.Object, _optionsMock.Object, _validatorMock.Object);
+    var service = new FileProcessorService(
+        _loggerMock.Object,
+        _optionsMock.Object,
+        _validatorMock.Object,
+        _jsonProcessorMock.Object,
+        _encodingDetectorMock.Object);
     var testFilePath = Path.Combine(_testDirectory, "utf8.txt");
 
     // UTF-8ファイルを作成
@@ -202,7 +226,12 @@ public class FileProcessorServiceTests : UnitTestBase
   public async Task DetectEncodingAsync_WithUtf8BomFile_ReturnsUtf8Encoding()
   {
     // Arrange
-    var service = new FileProcessorService(_loggerMock.Object, _optionsMock.Object, _validatorMock.Object);
+    var service = new FileProcessorService(
+        _loggerMock.Object,
+        _optionsMock.Object,
+        _validatorMock.Object,
+        _jsonProcessorMock.Object,
+        _encodingDetectorMock.Object);
     var testFilePath = Path.Combine(_testDirectory, "utf8bom.txt");
 
     // UTF-8 with BOMファイルを作成
@@ -221,7 +250,12 @@ public class FileProcessorServiceTests : UnitTestBase
   public void ShouldProcessFile_WithMatchingExtension_ReturnsTrue()
   {
     // Arrange
-    var service = new FileProcessorService(_loggerMock.Object, _optionsMock.Object, _validatorMock.Object);
+    var service = new FileProcessorService(
+        _loggerMock.Object,
+        _optionsMock.Object,
+        _validatorMock.Object,
+        _jsonProcessorMock.Object,
+        _encodingDetectorMock.Object);
     var testFilePath = Path.Combine(_testDirectory, "test.jsonl");
     File.WriteAllText(testFilePath, "{}");
 
@@ -237,7 +271,12 @@ public class FileProcessorServiceTests : UnitTestBase
   public void ShouldProcessFile_WithNonMatchingExtension_ReturnsFalse()
   {
     // Arrange
-    var service = new FileProcessorService(_loggerMock.Object, _optionsMock.Object, _validatorMock.Object);
+    var service = new FileProcessorService(
+        _loggerMock.Object,
+        _optionsMock.Object,
+        _validatorMock.Object,
+        _jsonProcessorMock.Object,
+        _encodingDetectorMock.Object);
     var testFilePath = Path.Combine(_testDirectory, "test.txt");
     File.WriteAllText(testFilePath, "text content");
 
@@ -254,7 +293,12 @@ public class FileProcessorServiceTests : UnitTestBase
   {
     // Arrange
     _config.RetentionPolicy.LargeFileSizeThreshold = 10; // 10バイト
-    var service = new FileProcessorService(_loggerMock.Object, _optionsMock.Object, _validatorMock.Object);
+    var service = new FileProcessorService(
+        _loggerMock.Object,
+        _optionsMock.Object,
+        _validatorMock.Object,
+        _jsonProcessorMock.Object,
+        _encodingDetectorMock.Object);
     var testFilePath = Path.Combine(_testDirectory, "large.jsonl");
     File.WriteAllText(testFilePath, "This is more than 10 bytes");
 
