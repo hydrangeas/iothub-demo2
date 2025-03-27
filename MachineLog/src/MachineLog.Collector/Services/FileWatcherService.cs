@@ -371,6 +371,7 @@ public class FileWatcherService : AsyncDisposableBase<FileWatcherService>, IFile
   /// </summary>
   private void OnFileCreated(object sender, FileSystemEventArgs e)
   {
+    // オブジェクトが破棄済みの場合は処理をスキップ
     if (_disposed)
       return;
 
@@ -403,6 +404,7 @@ public class FileWatcherService : AsyncDisposableBase<FileWatcherService>, IFile
   /// </summary>
   private void OnFileChanged(object sender, FileSystemEventArgs e)
   {
+    // オブジェクトが破棄済みの場合は処理をスキップ
     if (_disposed)
       return;
 
@@ -435,6 +437,7 @@ public class FileWatcherService : AsyncDisposableBase<FileWatcherService>, IFile
   /// </summary>
   private void CheckFileStability(object? state)
   {
+    // オブジェクトが破棄済みの場合は処理をスキップ
     if (_disposed)
       return;
 

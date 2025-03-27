@@ -319,8 +319,12 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
     {
       // SASトークンを使用した認証
       _logger.LogInformation("SASトークンを使用してDeviceClientを作成します: {DeviceId}", _config.DeviceId);
+
+      // 接続文字列からホスト名を抽出
+      string hostName = ExtractHostNameFromConnectionString(_config.ConnectionString);
+
       deviceClient = DeviceClient.Create(
-          GetHostNameFromConnectionString(_config.ConnectionString),
+          hostName,
           new DeviceAuthenticationWithToken(_config.DeviceId, _config.SasToken),
           TransportType.Mqtt);
     }
@@ -343,6 +347,31 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
     await Task.CompletedTask.ConfigureAwait(false);
 
     return deviceClient;
+  }
+
+  /// <summary>
+  /// 接続文字列からホスト名を抽出します
+  /// </summary>
+  /// <param name="connectionString">接続文字列</param>
+  /// <returns>ホスト名</returns>
+  private string ExtractHostNameFromConnectionString(string connectionString)
+  {
+    if (string.IsNullOrEmpty(connectionString))
+    {
+      throw new ArgumentException("接続文字列が指定されていません", nameof(connectionString));
+    }
+
+    // 接続文字列からHostNameを抽出
+    var parts = connectionString.Split(';');
+    foreach (var part in parts)
+    {
+      if (part.StartsWith("HostName=", StringComparison.OrdinalIgnoreCase))
+      {
+        return part.Substring("HostName=".Length);
+      }
+    }
+
+    throw new ArgumentException("接続文字列にHostNameが含まれていません", nameof(connectionString));
   }
 
   /// <summary>
@@ -446,35 +475,6 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
   }
 
   /// <summary>
-  /// 接続文字列からホスト名を取得します
-  /// </summary>
-  /// <param name="connectionString">接続文字列</param>
-  /// <returns>ホスト名</returns>
-  private string GetHostNameFromConnectionString(string connectionString)
-  {
-    var parts = connectionString.Split(';');
-    foreach (var part in parts)
-    {
-      var keyValue = part.Split('=', 2);
-      if (keyValue.Length == 2 && keyValue[0].Trim().Equals("HostName", StringComparison.OrdinalIgnoreCase))
-      {
-        return keyValue[1].Trim();
-      }
-    }
-    throw new ArgumentException("接続文字列にHostNameが含まれていません", nameof(connectionString));
-  }
-
-  /// <summary>
-  /// リソースのサイズを推定します
-  /// </summary>
-  /// <returns>推定サイズ（バイト単位）</returns>
-  protected override long EstimateResourceSize()
-  {
-    // DeviceClientは比較的大きなリソースとして扱う
-    return 5 * 1024 * 1024; // 5MB
-  }
-
-  /// <summary>
   /// マネージドリソースを解放します
   /// </summary>
   protected override void ReleaseManagedResources()
@@ -483,23 +483,27 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
 
     try
     {
-      // 接続を閉じる（非同期メソッドを同期的に呼び出す）
-      if (_deviceClient != null && _connectionState == ConnectionState.Connected)
+      if (_deviceClient != null)
       {
+        // デバイスクライアントを安全に解放
+        // 注意: 同期的な処理のため、非同期操作はタイムアウト付きで実行
         try
         {
-          // ここでは例外が発生してもリソース解放を続行する
-          _deviceClient.CloseAsync(CancellationToken.None).GetAwaiter().GetResult();
+          // 同期処理なため、5秒のタイムアウトを設定
+          using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+          var closeTask = _deviceClient.CloseAsync(cts.Token);
+
+          // 限定的なコンテキストでのみ待機
+          if (!closeTask.Wait(5000))
+          {
+            _logger.LogWarning("IoT Hubクライアントの切断がタイムアウトしました");
+          }
         }
         catch (Exception ex)
         {
-          _logger.LogWarning(ex, "IoT Hub接続の切断中にエラーが発生しました");
+          _logger.LogWarning(ex, "IoT Hubクライアントの切断中にエラーが発生しました");
         }
-      }
 
-      // DeviceClientを破棄
-      if (_deviceClient != null)
-      {
         _deviceClient.Dispose();
         _deviceClient = null;
       }
@@ -516,6 +520,16 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
 
     // 基底クラスのリソース解放を呼び出す
     base.ReleaseManagedResources();
+  }
+
+  /// <summary>
+  /// リソースのサイズを推定します
+  /// </summary>
+  /// <returns>推定サイズ（バイト単位）</returns>
+  protected override long EstimateResourceSize()
+  {
+    // DeviceClientは比較的大きなリソースとして扱う
+    return 5 * 1024 * 1024; // 5MB
   }
 
   /// <summary>
