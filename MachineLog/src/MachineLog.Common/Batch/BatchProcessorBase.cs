@@ -122,8 +122,10 @@ public abstract class BatchProcessorBase<T> : IBatchProcessor<T>, IDisposable, I
         _options.IdleTimeoutInMilliseconds);
 
     // バッチ処理ループを開始（外部のキャンセルトークンと内部のトークンをリンク）
-    var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, cancellationToken);
-    _processingTask = Task.Run(() => ProcessBatchLoopAsync(linkedCts.Token), linkedCts.Token);
+    using (var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, cancellationToken))
+    {
+        _processingTask = Task.Run(() => ProcessBatchLoopAsync(linkedCts.Token), linkedCts.Token);
+    }
 
     return Task.FromResult(true);
   }
@@ -373,7 +375,7 @@ public abstract class BatchProcessorBase<T> : IBatchProcessor<T>, IDisposable, I
     if (_isDisposed)
       throw new ObjectDisposedException(nameof(BatchProcessorBase<T>));
 
-    await foreach (var item in _queue.GetAsyncEnumerable(cancellationToken).ConfigureAwait(false))
+    await foreach (var item in _queue.GetAsyncEnumerable(cancellationToken))
     {
       if (cancellationToken.IsCancellationRequested)
         yield break;
