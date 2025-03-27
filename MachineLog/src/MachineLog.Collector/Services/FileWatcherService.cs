@@ -432,14 +432,25 @@ public class FileWatcherService : IFileWatcherService, IDisposable, IAsyncDispos
   /// <summary>
   /// ファイルの安定性をチェックするメソッド
   /// </summary>
-  private async void CheckFileStability(object? state)
+  private Task CheckFileStability(object? state)
   {
     if (_isDisposed)
-      return;
+      return Task.CompletedTask;
 
-    // 非同期ロックを使用して同時実行を防止
-    using (await _fileOperationLock.LockAsync(CancellationToken.None))
+    // 非同期メソッドを同期的に開始し、例外を適切に処理
+    return CheckFileStabilityInternalAsync(CancellationToken.None);
+  }
+
+  /// <summary>
+  /// ファイルの安定性をチェックする内部実装
+  /// </summary>
+  private async Task CheckFileStabilityInternalAsync(CancellationToken cancellationToken)
+  {
+    try
     {
+      // 非同期ロックを使用して同時実行を防止
+      using (await _fileOperationLock.LockAsync(cancellationToken))
+      {
       try
       {
         var now = DateTime.UtcNow;
@@ -515,6 +526,12 @@ public class FileWatcherService : IFileWatcherService, IDisposable, IAsyncDispos
       {
         _logger.LogError(ex, "ファイル安定性チェック処理中に予期しないエラーが発生しました");
       }
+      }
+    }
+    catch (Exception ex)
+    {
+      // 外部例外をログに記録
+      _logger.LogError(ex, "ファイル安定性チェックの実行中に予期しないエラーが発生しました");
     }
   }
 
@@ -621,7 +638,7 @@ public class FileWatcherService : IFileWatcherService, IDisposable, IAsyncDispos
       }
 
       _configLock.Dispose();
-      (_fileOperationLock as IDisposable)?.Dispose();
+      _fileOperationLock.Dispose();
     }
 
     _isDisposed = true;

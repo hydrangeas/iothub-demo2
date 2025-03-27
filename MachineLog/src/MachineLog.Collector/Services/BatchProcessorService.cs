@@ -182,15 +182,19 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable, IAsync
       BatchSizeBytes = _currentBatchSizeBytes
     };
 
-    // デッドロック検出
-    if (DeadlockDetector.TryAcquireLock("BatchProcessing", 5000))
+    // デッドロック検出（バッチ処理の同時実行による潜在的なデッドロックを検出）
+    bool potentialDeadlockDetected = false;
+    try
     {
-      _logger.LogWarning("潜在的なデッドロックを検出しました。処理を続行します。");
-    }
+      potentialDeadlockDetected = DeadlockDetector.TryAcquireLock("BatchProcessing", 5000);
+      if (potentialDeadlockDetected)
+      {
+        _logger.LogWarning("潜在的なデッドロックを検出しました。処理を続行します。");
+      }
 
-    // 非同期ロックを使用して同時実行を防止
-    using (await _processingLock.LockAsync(cancellationToken))
-    {
+      // 非同期ロックを使用して同時実行を防止
+      using (await _processingLock.LockAsync(cancellationToken))
+      {
       var stopwatch = Stopwatch.StartNew();
 
       try
@@ -261,8 +265,14 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable, IAsync
       {
         stopwatch.Stop();
         result.ProcessingTimeMs = stopwatch.ElapsedMilliseconds;
-        
-        // デッドロック検出のロックを解放
+      }
+      }
+    }
+    finally
+    {
+      // デッドロック検出のロックを解放（検出された場合のみ）
+      if (potentialDeadlockDetected)
+      {
         DeadlockDetector.ReleaseLock("BatchProcessing");
       }
     }
@@ -530,7 +540,7 @@ public class BatchProcessorService : IBatchProcessorService, IDisposable, IAsync
       _processingTokenSource.Dispose();
       _batchSizeLock.Dispose();
       _queueLock.Dispose();
-      (_processingLock as IDisposable)?.Dispose();
+      _processingLock.Dispose();
     }
 
     _isDisposed = true;
