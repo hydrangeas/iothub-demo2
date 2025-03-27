@@ -44,7 +44,9 @@ public static class ServiceCollectionExtensions
     // ファイル監視サービスの登録
     services.AddSingleton<IFileWatcherService, FileWatcherService>();
 
-    // ファイル処理サービスの登録
+    // ファイル処理関連サービスの登録
+    services.AddTransient<EncodingDetector>();
+    services.AddTransient<JsonLineProcessor>();
     services.AddTransient<IFileProcessorService, FileProcessorService>();
 
     // バリデーターの登録
