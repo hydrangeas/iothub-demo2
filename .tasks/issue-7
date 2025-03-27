@@ -18,4 +18,10 @@
 
 ## 作業ログ
 - feature/issue-7-iothub-integrationブランチを作成
-- IoTHubServiceクラスの実装を開始
+- IoTHubServiceクラスの実装
+- ServiceCollectionExtensions.csにIoTHubServiceの登録を追加
+- 階層的なフォルダ構造（yyyy/MM/dd/{machineId}）でのファイル保存を実装
+- 接続状態の監視と自動再接続機能を実装
+- リトライロジックの実装（指数バックオフ）
+- テスト用のプログラムを作成して動作確認
+- PR #32を作成
