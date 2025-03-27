@@ -1,0 +1,31 @@
+# Issue #7: IoT Hub連携機能の実装
+
+## 概要
+バッチ処理されたログデータをAzure IoT Hubに安全に転送する機能を実装します。
+
+## 実装内容
+1. IoTHubServiceクラスの実装
+   - デバイスクライアントの初期化と接続管理
+   - SASトークンを使用した認証
+   - ファイルアップロード機能の実装
+   - 接続状態管理とリトライロジック
+
+2. 依存関係の登録
+   - IoTHubServiceをDIコンテナに登録
+
+3. テストの実装
+   - 単体テストの作成
+
+## 作業ログ
+- feature/issue-7-iothub-integrationブランチを作成
+- IoTHubServiceクラスの実装
+- ServiceCollectionExtensions.csにIoTHubServiceの登録を追加
+- 階層的なフォルダ構造（yyyy/MM/dd/{machineId}）でのファイル保存を実装
+- 接続状態の監視と自動再接続機能を実装
+- リトライロジックの実装（指数バックオフ）
+- テスト用のプログラムを作成して動作確認
+- PR #32を作成
+- PR #32のレビューコメントに対応
+  - 非推奨APIの使用を修正（UploadToBlobAsyncの新しいバージョンを使用）
+  - 再接続ロジックを改善（専用のHandleReconnectionAsyncメソッドを作成）
+  - ConnectionStatusChangesHandlerにdefaultケースを追加（未知の接続状態をエラー状態として処理）
