@@ -62,6 +62,11 @@ public static class ServiceCollectionExtensions
     // バリデーターの登録
     services.AddTransient<FluentValidation.IValidator<MachineLog.Common.Models.LogEntry>, MachineLog.Common.Validation.LogEntryValidator>();
 
+    // ヘルスチェックの登録
+    services.AddHealthChecks()
+        .AddCheck<MachineLog.Collector.Health.IoTHubHealthCheck>("IoTHub")
+        .AddCheck<MachineLog.Collector.Health.FileSystemHealthCheck>("FileSystem");
+
     return services;
   }
 }
