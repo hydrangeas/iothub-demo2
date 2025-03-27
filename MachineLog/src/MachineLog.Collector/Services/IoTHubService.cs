@@ -325,6 +325,11 @@ public class IoTHubService : IIoTHubService, IDisposable
       case ConnectionStatus.Disabled:
         _connectionState = ConnectionState.Error;
         break;
+      default:
+        // 未知の接続状態の場合はエラー状態に設定
+        _logger.LogWarning("未知の接続状態が検出されました: {Status}", status);
+        _connectionState = ConnectionState.Error;
+        break;
     }
 
     // 一時的なエラーの場合は自動的に再接続を試みる
