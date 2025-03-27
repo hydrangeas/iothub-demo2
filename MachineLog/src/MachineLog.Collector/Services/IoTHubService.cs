@@ -299,9 +299,8 @@ public class IoTHubService : IIoTHubService, IDisposable
     _logger.LogInformation("ファイルをアップロードします: {Path}, サイズ: {Size} バイト", uploadPath, fileStream.Length);
 
     // ファイルをアップロード
-    #pragma warning disable CS0618 // Type or member is obsolete
-    await _deviceClient.UploadToBlobAsync(uploadPath, fileStream, cancellationToken);
-    #pragma warning restore CS0618 // Type or member is obsolete
+    // 新しいUploadToBlobAsyncメソッドを使用
+    await _deviceClient.UploadToBlobAsync(uploadPath, fileStream);
     
     _logger.LogInformation("ファイルのアップロードが完了しました: {Path}", uploadPath);
   }
@@ -334,17 +333,23 @@ public class IoTHubService : IIoTHubService, IDisposable
          reason == ConnectionStatusChangeReason.Connection_Ok))
     {
       _logger.LogWarning("一時的な接続エラーが発生しました。再接続を試みます。");
-      Task.Run(async () =>
-      {
-        try
-        {
-          await ConnectAsync();
-        }
-        catch (Exception ex)
-        {
-          _logger.LogError(ex, "自動再接続中にエラーが発生しました");
-        }
-      });
+      _ = HandleReconnectionAsync();
+    }
+  }
+
+  /// <summary>
+  /// 再接続処理を行います
+  /// </summary>
+  /// <returns>タスク</returns>
+  private async Task HandleReconnectionAsync()
+  {
+    try
+    {
+      await ConnectAsync();
+    }
+    catch (Exception ex)
+    {
+      _logger.LogError(ex, "自動再接続中にエラーが発生しました");
     }
   }
 
