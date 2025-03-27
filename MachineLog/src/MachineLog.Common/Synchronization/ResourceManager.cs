@@ -11,14 +11,16 @@ namespace MachineLog.Common.Synchronization
     /// </summary>
     /// <typeparam name="TKey">リソースのキーの型</typeparam>
     /// <typeparam name="TResource">リソースの型</typeparam>
-    public class ResourceManager<TKey, TResource> : IDisposable where TResource : class
+    public class ResourceManager<TKey, TResource> : IDisposable, IAsyncDisposable where TResource : class
     {
         private readonly ConcurrentDictionary<TKey, ResourceEntry> _resources = new();
         private readonly Func<TKey, CancellationToken, Task<TResource>> _resourceFactory;
         private readonly Action<TResource> _resourceCleanup;
         private readonly TimeSpan _resourceTimeout;
-        private readonly Timer _cleanupTimer;
+        private readonly TimeSpan _cleanupInterval;
         private readonly SemaphoreSlim _cleanupLock = new SemaphoreSlim(1, 1);
+        private readonly CancellationTokenSource _cleanupCts = new CancellationTokenSource();
+        private Task? _cleanupTask;
         private bool _isDisposed;
 
         /// <summary>
@@ -37,10 +39,10 @@ namespace MachineLog.Common.Synchronization
             _resourceFactory = resourceFactory ?? throw new ArgumentNullException(nameof(resourceFactory));
             _resourceCleanup = resourceCleanup;
             _resourceTimeout = resourceTimeout ?? TimeSpan.FromMinutes(30);
+            _cleanupInterval = cleanupInterval ?? TimeSpan.FromMinutes(5);
             
-            // クリーンアップタイマーを設定
-            var interval = cleanupInterval ?? TimeSpan.FromMinutes(5);
-            _cleanupTimer = new Timer(CleanupCallback, null, interval, interval);
+            // クリーンアップタスクを開始
+            _cleanupTask = RunCleanupTaskAsync(_cleanupCts.Token);
         }
 
         /// <summary>
@@ -148,15 +150,44 @@ namespace MachineLog.Common.Synchronization
         }
 
         /// <summary>
-        /// クリーンアップコールバック
+        /// 定期的なクリーンアップタスクを実行します
         /// </summary>
-        private async void CleanupCallback(object state)
+        /// <param name="cancellationToken">キャンセレーショントークン</param>
+        private async Task RunCleanupTaskAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    // 指定された間隔で待機
+                    await Task.Delay(_cleanupInterval, cancellationToken);
+                    
+                    // クリーンアップを実行
+                    await CleanupResourcesAsync(cancellationToken);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // キャンセルは正常な動作
+            }
+            catch (Exception ex)
+            {
+                // 予期しないエラーをログに記録
+                Console.Error.WriteLine($"クリーンアップタスクでエラーが発生しました: {ex}");
+            }
+        }
+
+        /// <summary>
+        /// タイムアウトしたリソースをクリーンアップします
+        /// </summary>
+        /// <param name="cancellationToken">キャンセレーショントークン</param>
+        private async Task CleanupResourcesAsync(CancellationToken cancellationToken)
         {
             if (_isDisposed)
                 return;
 
             // 同時に複数のクリーンアップが実行されないようにロック
-            if (!await _cleanupLock.WaitAsync(0))
+            if (!await _cleanupLock.WaitAsync(0, cancellationToken))
                 return;
 
             try
@@ -167,6 +198,9 @@ namespace MachineLog.Common.Synchronization
                 // タイムアウトしたリソースを特定
                 foreach (var pair in _resources)
                 {
+                    if (cancellationToken.IsCancellationRequested)
+                        break;
+                        
                     var timeSinceLastAccess = now - pair.Value.LastAccessed;
                     if (timeSinceLastAccess > _resourceTimeout)
                     {
@@ -177,6 +211,9 @@ namespace MachineLog.Common.Synchronization
                 // タイムアウトしたリソースを解放
                 foreach (var key in keysToRemove)
                 {
+                    if (cancellationToken.IsCancellationRequested)
+                        break;
+                        
                     Release(key);
                 }
             }
@@ -189,6 +226,48 @@ namespace MachineLog.Common.Synchronization
             {
                 _cleanupLock.Release();
             }
+        }
+
+        /// <summary>
+        /// リソースを非同期で解放します
+        /// </summary>
+        public async ValueTask DisposeAsync()
+        {
+            await DisposeAsyncCore();
+            Dispose(false);
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
+        /// リソースを非同期で解放する内部実装
+        /// </summary>
+        protected virtual async ValueTask DisposeAsyncCore()
+        {
+            if (_isDisposed)
+                return;
+
+            // クリーンアップタスクをキャンセル
+            _cleanupCts.Cancel();
+            
+            // クリーンアップタスクの完了を待機
+            if (_cleanupTask != null)
+            {
+                try
+                {
+                    await _cleanupTask;
+                }
+                catch (OperationCanceledException)
+                {
+                    // キャンセルは正常な動作
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"クリーンアップタスクの終了中にエラーが発生しました: {ex}");
+                }
+            }
+            
+            // すべてのリソースを解放
+            ReleaseAll();
         }
 
         /// <summary>
@@ -211,7 +290,24 @@ namespace MachineLog.Common.Synchronization
 
             if (disposing)
             {
-                _cleanupTimer.Dispose();
+                // クリーンアップタスクをキャンセル
+                _cleanupCts.Cancel();
+                _cleanupCts.Dispose();
+                
+                // クリーンアップタスクの完了を待機（同期的）
+                if (_cleanupTask != null && !_cleanupTask.IsCompleted)
+                {
+                    try
+                    {
+                        // 短いタイムアウトで待機
+                        _cleanupTask.Wait(TimeSpan.FromSeconds(1));
+                    }
+                    catch (AggregateException)
+                    {
+                        // タスクのキャンセルや例外は無視
+                    }
+                }
+                
                 _cleanupLock.Dispose();
                 ReleaseAll();
             }
