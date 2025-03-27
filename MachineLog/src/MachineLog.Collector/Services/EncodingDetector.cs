@@ -23,8 +23,9 @@ public class EncodingDetector
   /// ファイルのエンコーディングを検出します
   /// </summary>
   /// <param name="filePath">ファイルパス</param>
+  /// <param name="cancellationToken">キャンセレーショントークン</param>
   /// <returns>検出されたエンコーディング</returns>
-  public async Task<EncodingDetectionResult> DetectEncodingAsync(string filePath)
+  public async Task<EncodingDetectionResult> DetectEncodingAsync(string filePath, CancellationToken cancellationToken = default)
   {
     try
     {
@@ -40,14 +41,14 @@ public class EncodingDetector
       }
 
       // BOMを確認
-      var result = await CheckBomAsync(filePath);
+      var result = await CheckBomAsync(filePath, cancellationToken);
       if (result.HasBom)
       {
         return result;
       }
 
       // BOMがない場合は、コンテンツ解析によるエンコーディング推定
-      return await AnalyzeContentEncodingAsync(filePath);
+      return await AnalyzeContentEncodingAsync(filePath, cancellationToken);
     }
     catch (Exception ex)
     {
@@ -66,14 +67,15 @@ public class EncodingDetector
   /// ファイルのBOMを確認します
   /// </summary>
   /// <param name="filePath">ファイルパス</param>
+  /// <param name="cancellationToken">キャンセレーショントークン</param>
   /// <returns>BOM検出結果</returns>
-  private async Task<EncodingDetectionResult> CheckBomAsync(string filePath)
+  private async Task<EncodingDetectionResult> CheckBomAsync(string filePath, CancellationToken cancellationToken = default)
   {
     using var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
 
     // BOMを確認
     var bom = new byte[4];
-    var read = await fileStream.ReadAsync(bom, 0, 4);
+    var read = await fileStream.ReadAsync(bom, 0, 4, cancellationToken);
 
     // UTF-8 BOM (EF BB BF)
     if (read >= 3 && bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF)
@@ -143,8 +145,9 @@ public class EncodingDetector
   /// ファイルの内容からエンコーディングを推定します
   /// </summary>
   /// <param name="filePath">ファイルパス</param>
+  /// <param name="cancellationToken">キャンセレーショントークン</param>
   /// <returns>エンコーディング推定結果</returns>
-  private async Task<EncodingDetectionResult> AnalyzeContentEncodingAsync(string filePath)
+  private async Task<EncodingDetectionResult> AnalyzeContentEncodingAsync(string filePath, CancellationToken cancellationToken = default)
   {
     try
     {
@@ -153,7 +156,7 @@ public class EncodingDetector
 
       using var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
       var buffer = new byte[Math.Min(samplingSize, fileStream.Length)];
-      await fileStream.ReadAsync(buffer, 0, buffer.Length);
+      await fileStream.ReadAsync(buffer, 0, buffer.Length, cancellationToken);
 
       // UTF-8の検証（不正なバイトシーケンスがないかチェック）
       if (IsValidUtf8(buffer))
@@ -263,6 +266,10 @@ public class EncodingDetector
   /// <returns>Shift-JISの可能性が高い場合はtrue</returns>
   private bool IsLikelyShiftJis(byte[] buffer)
   {
+    // Shift-JIS検出のための定数
+    const int MIN_SJIS_CHARS = 10;          // 最小Shift-JIS文字数
+    const double MIN_SJIS_RATIO = 0.1;      // 最小Shift-JIS文字の割合
+
     int sjisCount = 0;
     int i = 0;
 
@@ -293,37 +300,37 @@ public class EncodingDetector
     }
 
     // Shift_JISの2バイト文字が一定数以上あればShift_JISと判断
-    return sjisCount > 10 && sjisCount * 2 > buffer.Length * 0.1;
+    return sjisCount > MIN_SJIS_CHARS && sjisCount * 2 > buffer.Length * MIN_SJIS_RATIO;
   }
-}
-
-/// <summary>
-/// エンコーディング検出結果を表すクラス
-/// </summary>
-public class EncodingDetectionResult
-{
-  /// <summary>
-  /// 検出されたエンコーディング
-  /// </summary>
-  public Encoding Encoding { get; set; } = Encoding.UTF8;
 
   /// <summary>
-  /// BOMがあるかどうか
+  /// エンコーディング検出結果を表すクラス
   /// </summary>
-  public bool HasBom { get; set; }
+  public class EncodingDetectionResult
+  {
+    /// <summary>
+    /// 検出されたエンコーディング
+    /// </summary>
+    public Encoding Encoding { get; set; } = Encoding.UTF8;
 
-  /// <summary>
-  /// 有効なエンコーディングかどうか
-  /// </summary>
-  public bool IsValidEncoding { get; set; }
+    /// <summary>
+    /// BOMがあるかどうか
+    /// </summary>
+    public bool HasBom { get; set; }
 
-  /// <summary>
-  /// 検出信頼度（0.0～1.0）
-  /// </summary>
-  public float DetectionConfidence { get; set; } = 1.0f;
+    /// <summary>
+    /// 有効なエンコーディングかどうか
+    /// </summary>
+    public bool IsValidEncoding { get; set; }
 
-  /// <summary>
-  /// エラーメッセージ（エラーがある場合）
-  /// </summary>
-  public string? ErrorMessage { get; set; }
+    /// <summary>
+    /// 検出信頼度（0.0～1.0）
+    /// </summary>
+    public float DetectionConfidence { get; set; } = 1.0f;
+
+    /// <summary>
+    /// エラーメッセージ（エラーがある場合）
+    /// </summary>
+    public string? ErrorMessage { get; set; }
+  }
 }
