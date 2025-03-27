@@ -60,6 +60,15 @@ public class FileProcessorService : IFileProcessorService
     {
       _logger.LogInformation("ファイル処理を開始します: {FilePath}", filePath);
 
+      // キャンセルされた場合は早期リターン
+      if (cancellationToken.IsCancellationRequested)
+      {
+        _logger.LogWarning("処理がキャンセルされました: {FilePath}", filePath);
+        result.Success = false;
+        result.ErrorMessage = "処理がキャンセルされました";
+        return result;
+      }
+
       if (!ShouldProcessFile(filePath))
       {
         _logger.LogInformation("ファイルは処理対象外です: {FilePath}", filePath);
@@ -68,7 +77,7 @@ public class FileProcessorService : IFileProcessorService
       }
 
       // ファイルのエンコーディングを検出
-      var encodingDetailResult = await GetEncodingDetectionResultAsync(filePath);
+      var encodingDetailResult = await GetEncodingDetectionResultAsync(filePath).ConfigureAwait(false);
       if (!encodingDetailResult.IsValidEncoding)
       {
         _logger.LogError("ファイルの読み込みに失敗しました: {FilePath}, エラー: {Error}", filePath, encodingDetailResult.ErrorMessage);
@@ -77,8 +86,17 @@ public class FileProcessorService : IFileProcessorService
         return result;
       }
 
+      // キャンセルされた場合は早期リターン
+      if (cancellationToken.IsCancellationRequested)
+      {
+        _logger.LogWarning("処理がキャンセルされました: {FilePath}", filePath);
+        result.Success = false;
+        result.ErrorMessage = "処理がキャンセルされました";
+        return result;
+      }
+
       // JSONファイル処理
-      var jsonResult = await _jsonProcessor.ProcessFileAsync(filePath, encodingDetailResult.Encoding, cancellationToken);
+      var jsonResult = await _jsonProcessor.ProcessFileAsync(filePath, encodingDetailResult.Encoding, cancellationToken).ConfigureAwait(false);
 
       // 処理結果を設定
       result.ProcessedRecords = jsonResult.ProcessedRecords;
@@ -105,6 +123,14 @@ public class FileProcessorService : IFileProcessorService
         }
       }
 
+      return result;
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+      // キャンセルは正常な動作
+      _logger.LogInformation("ファイル処理がキャンセルされました: {FilePath}", filePath);
+      result.Success = false;
+      result.ErrorMessage = "処理がキャンセルされました";
       return result;
     }
     catch (Exception ex)

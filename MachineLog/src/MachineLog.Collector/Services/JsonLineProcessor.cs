@@ -1,8 +1,15 @@
 using FluentValidation;
 using MachineLog.Common.Models;
 using Microsoft.Extensions.Logging;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace MachineLog.Collector.Services;
 
@@ -54,59 +61,16 @@ public class JsonLineProcessor
 
     try
     {
-      // 大容量ファイル対応のためにバッファサイズとストリーム処理を最適化
-      using var fileStream = new FileStream(
-          filePath,
-          FileMode.Open,
-          FileAccess.Read,
-          FileShare.ReadWrite,
-          bufferSize: 4096,
-          useAsync: true);
-
-      using var streamReader = new StreamReader(fileStream, encoding);
-
-      string? line;
-      int lineNumber = 0;
-
-      while ((line = await streamReader.ReadLineAsync(cancellationToken)) != null)
+      // 非同期ストリームを使用して処理
+      await foreach (var result in ProcessLinesAsync(filePath, encoding, cancellationToken).ConfigureAwait(false))
       {
-        lineNumber++;
-
-        if (string.IsNullOrWhiteSpace(line))
+        if (result.IsValid && result.Entry != null)
         {
-          continue;
+          validEntries.Add(result.Entry);
         }
-
-        try
+        else if (!result.IsValid && result.Error != null)
         {
-          var entry = await ProcessLineAsync(line, filePath, lineNumber, cancellationToken);
-
-          if (entry != null)
-          {
-            validEntries.Add(entry);
-          }
-        }
-        catch (JsonException ex)
-        {
-          _logger.LogWarning(ex, "JSON解析エラー（行 {LineNumber}）: {Line}", lineNumber, TruncateForLogging(line));
-          invalidEntries.Add(new ProcessingError
-          {
-            LineNumber = lineNumber,
-            Content = line,
-            ErrorType = ErrorType.JsonParseError,
-            ErrorMessage = ex.Message
-          });
-        }
-        catch (Exception ex)
-        {
-          _logger.LogError(ex, "行の処理中にエラーが発生しました（行 {LineNumber}）", lineNumber);
-          invalidEntries.Add(new ProcessingError
-          {
-            LineNumber = lineNumber,
-            Content = line,
-            ErrorType = ErrorType.ProcessingError,
-            ErrorMessage = ex.Message
-          });
+          invalidEntries.Add(result.Error);
         }
       }
 
@@ -128,6 +92,92 @@ public class JsonLineProcessor
   }
 
   /// <summary>
+  /// ファイルの各行を非同期ストリームとして処理します
+  /// </summary>
+  /// <param name="filePath">処理対象のファイルパス</param>
+  /// <param name="encoding">ファイルのエンコーディング</param>
+  /// <param name="cancellationToken">キャンセレーショントークン</param>
+  /// <returns>処理結果の非同期ストリーム</returns>
+  public async IAsyncEnumerable<LineProcessingResult> ProcessLinesAsync(
+      string filePath,
+      Encoding encoding,
+      [EnumeratorCancellation] CancellationToken cancellationToken = default)
+  {
+    // 大容量ファイル対応のためにバッファサイズとストリーム処理を最適化
+    using var fileStream = new FileStream(
+        filePath,
+        FileMode.Open,
+        FileAccess.Read,
+        FileShare.ReadWrite,
+        bufferSize: 4096,
+        useAsync: true);
+
+    using var streamReader = new StreamReader(fileStream, encoding);
+
+    string? line;
+    int lineNumber = 0;
+
+    while ((line = await streamReader.ReadLineAsync(cancellationToken).ConfigureAwait(false)) != null)
+    {
+      if (cancellationToken.IsCancellationRequested)
+        yield break;
+
+      lineNumber++;
+
+      if (string.IsNullOrWhiteSpace(line))
+      {
+        continue;
+      }
+
+      LineProcessingResult result;
+      try
+      {
+        var entry = await ProcessLineAsync(line, filePath, lineNumber, cancellationToken).ConfigureAwait(false);
+        result = new LineProcessingResult
+        {
+          IsValid = entry != null,
+          Entry = entry,
+          LineNumber = lineNumber
+        };
+      }
+      catch (JsonException ex)
+      {
+        _logger.LogWarning(ex, "JSON解析エラー（行 {LineNumber}）: {Line}", lineNumber, TruncateForLogging(line));
+        result = new LineProcessingResult
+        {
+          IsValid = false,
+          Error = new ProcessingError
+          {
+            LineNumber = lineNumber,
+            Content = line,
+            ErrorType = ErrorType.JsonParseError,
+            ErrorMessage = ex.Message
+          },
+          LineNumber = lineNumber
+        };
+      }
+      catch (Exception ex)
+      {
+        _logger.LogError(ex, "行の処理中にエラーが発生しました（行 {LineNumber}）", lineNumber);
+        result = new LineProcessingResult
+        {
+          IsValid = false,
+          Error = new ProcessingError
+          {
+            LineNumber = lineNumber,
+            Content = line,
+            ErrorType = ErrorType.ProcessingError,
+            ErrorMessage = ex.Message
+          },
+          LineNumber = lineNumber
+        };
+      }
+
+      yield return result;
+    }
+  }
+
+  /// <summary>
   /// 1行を処理してLogEntryに変換します
   /// </summary>
   /// <param name="line">処理対象の行</param>
@@ -143,6 +193,8 @@ public class JsonLineProcessor
   {
     try
     {
+      cancellationToken.ThrowIfCancellationRequested();
+
       // UTF-8エンコーディングのバイト配列からの直接デシリアライズは
       // 大量の行を処理する場合にGCプレッシャーを軽減できる
       using var jsonDocument = JsonDocument.Parse(line);
@@ -175,7 +227,7 @@ public class JsonLineProcessor
       }
 
       // バリデーション
-      var validationResult = await _validator.ValidateAsync(entry, cancellationToken);
+      var validationResult = await _validator.ValidateAsync(entry, cancellationToken).ConfigureAwait(false);
       if (!validationResult.IsValid)
       {
         var errors = string.Join(", ", validationResult.Errors.Select(e => e.ErrorMessage));
@@ -185,9 +237,14 @@ public class JsonLineProcessor
 
       return entry;
     }
+    catch (OperationCanceledException)
+    {
+      // キャンセルは正常な動作として再スロー
+      throw;
+    }
     catch (Exception)
     {
-      // 例外はこのメソッドの呼び出し元で処理
+      // その他の例外はこのメソッドの呼び出し元で処理
       throw;
     }
   }
@@ -204,6 +261,32 @@ public class JsonLineProcessor
 
     return input.Substring(0, maxLength) + "...";
   }
+}
+
+/// <summary>
+/// 行の処理結果を表すクラス
+/// </summary>
+public class LineProcessingResult
+{
+  /// <summary>
+  /// 処理が成功したかどうか
+  /// </summary>
+  public bool IsValid { get; set; }
+
+  /// <summary>
+  /// 処理されたエントリ（成功時）
+  /// </summary>
+  public LogEntry? Entry { get; set; }
+
+  /// <summary>
+  /// 処理エラー（失敗時）
+  /// </summary>
+  public ProcessingError? Error { get; set; }
+
+  /// <summary>
+  /// 行番号
+  /// </summary>
+  public int LineNumber { get; set; }
 }
 
 /// <summary>

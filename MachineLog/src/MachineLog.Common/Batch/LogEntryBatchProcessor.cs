@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using MachineLog.Common.Models;
 
@@ -12,10 +13,23 @@ namespace MachineLog.Common.Batch;
 /// </summary>
 public class LogEntryBatchProcessor : BatchProcessorBase<LogEntry>
 {
-  private readonly Func<List<LogEntry>, Task<bool>> _processBatchFunc;
+  private readonly Func<List<LogEntry>, CancellationToken, Task<bool>> _processBatchFunc;
 
   /// <summary>
   /// LogEntryのバッチ処理を行うクラスを初期化する
+  /// </summary>
+  /// <param name="processBatchFunc">バッチを処理する関数</param>
+  /// <param name="options">バッチ処理のオプション</param>
+  public LogEntryBatchProcessor(
+      Func<List<LogEntry>, CancellationToken, Task<bool>> processBatchFunc,
+      BatchProcessorOptions options = null)
+      : base(options ?? BatchProcessorOptions.Default)
+  {
+    _processBatchFunc = processBatchFunc ?? throw new ArgumentNullException(nameof(processBatchFunc));
+  }
+
+  /// <summary>
+  /// LogEntryのバッチ処理を行うクラスを初期化する（下位互換性のため）
   /// </summary>
   /// <param name="processBatchFunc">バッチを処理する関数</param>
   /// <param name="options">バッチ処理のオプション</param>
@@ -24,7 +38,11 @@ public class LogEntryBatchProcessor : BatchProcessorBase<LogEntry>
       BatchProcessorOptions options = null)
       : base(options ?? BatchProcessorOptions.Default)
   {
-    _processBatchFunc = processBatchFunc ?? throw new ArgumentNullException(nameof(processBatchFunc));
+    if (processBatchFunc == null)
+      throw new ArgumentNullException(nameof(processBatchFunc));
+      
+    // キャンセルトークンを無視するラッパー関数を作成
+    _processBatchFunc = (batch, token) => processBatchFunc(batch);
   }
 
   /// <summary>
@@ -53,11 +71,15 @@ public class LogEntryBatchProcessor : BatchProcessorBase<LogEntry>
   /// バッチを処理する
   /// </summary>
   /// <param name="batch">処理するバッチ</param>
+  /// <param name="cancellationToken">キャンセレーショントークン</param>
   /// <returns>処理が成功したかどうかを示す非同期タスク</returns>
-  protected override async Task<bool> ProcessBatchItemsAsync(List<LogEntry> batch)
+  protected override async Task<bool> ProcessBatchItemsAsync(List<LogEntry> batch, CancellationToken cancellationToken = default)
   {
     if (batch == null || batch.Count == 0)
       return true;
+
+    if (cancellationToken.IsCancellationRequested)
+      return false;
 
     try
     {
@@ -69,7 +91,12 @@ public class LogEntryBatchProcessor : BatchProcessorBase<LogEntry>
       }
 
       // バッチ処理関数を呼び出す
-      return await _processBatchFunc(batch);
+      return await _processBatchFunc(batch, cancellationToken).ConfigureAwait(false);
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+      // キャンセルは正常な動作
+      return false;
     }
     catch (Exception ex)
     {
