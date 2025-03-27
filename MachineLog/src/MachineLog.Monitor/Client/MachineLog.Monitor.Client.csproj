@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <ServiceWorkerAssetsManifest>service-worker-assets.js</ServiceWorkerAssetsManifest>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <OutputType>Library</OutputType>
   </PropertyGroup>
 
   <ItemGroup>
