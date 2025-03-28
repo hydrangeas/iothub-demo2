@@ -1,0 +1,14 @@
+# Issue #12
+
+## 作業内容
+
+### 2025/3/28
+1. IoTHubServiceクラスにMachineLog.Common.Utilities.RetryPolicyの参照を追加
+2. 新しく追加されたHttpRequestエラーカテゴリのためにMachineLogException.csにErrorCategoryを追加
+3. IoTHubServiceのUploadFileAsync処理を改善し、高度なリトライハンドラを使用するように修正
+4. テストコードを修正し、新しいコンストラクタパラメータに対応
+
+## 課題の解決策
+1. RetryPolicy.csファイルをMachineLog.Common.Utilitiesに作成し、リトライポリシー機能を共通化
+2. IoTHubServiceがCommonクラスを使用するように修正
+3. 既存のテストを新しいインターフェースに対応するよう更新

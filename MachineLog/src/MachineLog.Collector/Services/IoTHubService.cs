@@ -1,5 +1,7 @@
 using MachineLog.Collector.Models;
 using MachineLog.Collector.Utilities;
+using MachineLog.Common.Exceptions;
+using MachineLog.Common.Logging;
 using MachineLog.Common.Utilities;
 using Microsoft.Azure.Devices.Client;
 using Microsoft.Azure.Devices.Client.Exceptions;
@@ -8,6 +10,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Polly;
 using Polly.Retry;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net.Sockets;
 using System.Text;
@@ -25,35 +28,36 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
   private ConnectionState _connectionState;
   private readonly SemaphoreSlim _connectionLock = new SemaphoreSlim(1, 1);
   private readonly AsyncRetryPolicy _retryPolicy;
+  private readonly StructuredLogger _structuredLogger;
+  private readonly RetryHandler _retryHandler;
 
   /// <summary>
   /// コンストラクタ
   /// </summary>
   /// <param name="logger">ロガー</param>
   /// <param name="config">IoT Hub設定</param>
+  /// <param name="structuredLoggerFactory">構造化ロガーファクトリ</param>
+  /// <param name="retryHandlerFactory">リトライハンドラファクトリ</param>
   public IoTHubService(
       ILogger<IoTHubService> logger,
-      IOptions<IoTHubConfig> config) : base(true) // リソースマネージャーに登録
+      IOptions<IoTHubConfig> config,
+      Func<ILogger, StructuredLogger> structuredLoggerFactory,
+      Func<ILogger, RetryHandler> retryHandlerFactory) : base(true) // リソースマネージャーに登録
   {
     _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
     _connectionState = ConnectionState.Disconnected;
 
-    // 標準的なリトライポリシーを作成
-    _retryPolicy = Policy
-        .Handle<IotHubException>()
-        .Or<TimeoutException>()
-        .Or<SocketException>()
-        .Or<IOException>()
-        .WaitAndRetryAsync(
-            5, // 最大リトライ回数
-            retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)), // 指数バックオフ
-            (exception, timeSpan, retryCount, context) =>
-            {
-              _logger.LogWarning(exception,
-                  "IoT Hub操作中にエラーが発生しました。{RetryCount}回目のリトライを{RetryTimeSpan:0.00}秒後に実行します。",
-                  retryCount, timeSpan.TotalSeconds);
-            });
+    // 構造化ロガーとリトライハンドラを初期化
+    _structuredLogger = structuredLoggerFactory?.Invoke(logger) ?? throw new ArgumentNullException(nameof(structuredLoggerFactory));
+    _retryHandler = retryHandlerFactory?.Invoke(logger) ?? throw new ArgumentNullException(nameof(retryHandlerFactory));
+
+    // IoT Hub操作用のリトライポリシーを作成
+    _retryPolicy = MachineLog.Common.Utilities.RetryPolicy.CreateIoTHubRetryPolicy(
+        logger,
+        "IoTHubOperation",
+        maxRetryCount: 5,
+        initialBackoffSeconds: 1.0);
   }
 
   /// <summary>
@@ -106,8 +110,8 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
         // 接続を開く（リトライポリシーを使用）
         await _retryPolicy.ExecuteAsync(async (ct) =>
         {
-            await _deviceClient.OpenAsync(ct).ConfigureAwait(false);
-            _logger.LogDebug("IoT Hub接続が確立されました: {DeviceId}", _config.DeviceId);
+          await _deviceClient.OpenAsync(ct).ConfigureAwait(false);
+          _logger.LogDebug("IoT Hub接続が確立されました: {DeviceId}", _config.DeviceId);
         }, cancellationToken).ConfigureAwait(false);
 
         _connectionState = ConnectionState.Connected;
@@ -119,7 +123,7 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
         // ロックを確実に解放
         if (_connectionLock.CurrentCount == 0)
         {
-            _connectionLock.Release();
+          _connectionLock.Release();
         }
       }
     }
@@ -179,8 +183,8 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
         // 接続を閉じる（リトライポリシーを使用）
         await _retryPolicy.ExecuteAsync(async (ct) =>
         {
-            await _deviceClient.CloseAsync(ct).ConfigureAwait(false);
-            _logger.LogDebug("IoT Hub接続が閉じられました: {DeviceId}", _config.DeviceId);
+          await _deviceClient.CloseAsync(ct).ConfigureAwait(false);
+          _logger.LogDebug("IoT Hub接続が閉じられました: {DeviceId}", _config.DeviceId);
         }, cancellationToken).ConfigureAwait(false);
 
         // デバイスクライアントを安全に解放
@@ -195,7 +199,7 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
         // ロックを確実に解放
         if (_connectionLock.CurrentCount == 0)
         {
-            _connectionLock.Release();
+          _connectionLock.Release();
         }
       }
     }
@@ -281,12 +285,24 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
       // ファイルをアップロード
       using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, true))
       {
-        // リトライポリシーを使用してアップロード
-        await _retryPolicy.ExecuteAsync(async (ct) =>
+        // 高度なリトライハンドラを使用してアップロード
+        var context = new Dictionary<string, object>
         {
+          ["FilePath"] = filePath,
+          ["BlobName"] = blobName,
+          ["FileSize"] = fileInfo.Length
+        };
+
+        await _retryHandler.ExecuteWithRetryAsync(
+          $"IoTHubUpload_{Path.GetFileName(filePath)}",
+          async (ct) =>
+          {
             await UploadFileToIoTHubAsync(fileStream, blobName, ct).ConfigureAwait(false);
             _logger.LogDebug("ファイルのアップロードが成功しました: {FilePath} -> {BlobName}", filePath, blobName);
-        }, cancellationToken).ConfigureAwait(false);
+          },
+          _retryPolicy,
+          context,
+          cancellationToken).ConfigureAwait(false);
       }
 
       result.Success = true;
@@ -433,11 +449,60 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
     var uploadPath = Path.Combine(folderPath, blobName);
     _logger.LogInformation("ファイルをアップロードします: {Path}, サイズ: {Size} バイト", uploadPath, fileStream.Length);
 
-    // UploadToBlobAsyncを使用（問題が解決するまで一時的対応）
-    // 注意: Azure IoT SDK内部でConfigureAwait(false)が使用されていない可能性があるため、
-    // 呼び出し元でConfigureAwait(false)を使用することで、デッドロックのリスクを軽減
-    await _deviceClient.UploadToBlobAsync(uploadPath, fileStream, cancellationToken).ConfigureAwait(false);
-    _logger.LogInformation("ファイルのアップロードが完了しました: {Path}", uploadPath);
+    try
+    {
+      // ステップ1: SASアップロードURIを取得
+      var sasUriResponse = await _deviceClient.GetFileUploadSasUriAsync(
+          new FileUploadSasUriRequest
+          {
+            BlobName = uploadPath
+          },
+          cancellationToken).ConfigureAwait(false);
+
+      _logger.LogDebug("ファイルアップロード用のSAS URIを取得しました: {CorrelationId}", sasUriResponse.CorrelationId);
+
+      // ステップ2: Azure Blob Storageにファイルをアップロードするためのクライアントライブラリを使用
+      var blobClient = new Azure.Storage.Blobs.BlobClient(sasUriResponse.GetBlobUri());
+
+      // コンテンツタイプの推定
+      string contentType = "application/octet-stream"; // デフォルト
+      if (Path.GetExtension(blobName).ToLower() == ".json" || Path.GetExtension(blobName).ToLower() == ".jsonl")
+      {
+        contentType = "application/json";
+      }
+      else if (Path.GetExtension(blobName).ToLower() == ".log" || Path.GetExtension(blobName).ToLower() == ".txt")
+      {
+        contentType = "text/plain";
+      }
+
+      // Azure Blob Storageにアップロード
+      var blobUploadOptions = new Azure.Storage.Blobs.Models.BlobUploadOptions
+      {
+        HttpHeaders = new Azure.Storage.Blobs.Models.BlobHttpHeaders
+        {
+          ContentType = contentType
+        }
+      };
+
+      await blobClient.UploadAsync(fileStream, blobUploadOptions, cancellationToken).ConfigureAwait(false);
+      _logger.LogDebug("Blobストレージへのアップロードが完了しました: {CorrelationId}", sasUriResponse.CorrelationId);
+
+      // ステップ3: IoT Hubにアップロード完了を通知
+      await _deviceClient.CompleteFileUploadAsync(
+          new FileUploadCompletionNotification
+          {
+            CorrelationId = sasUriResponse.CorrelationId,
+            IsSuccess = true
+          },
+          cancellationToken).ConfigureAwait(false);
+
+      _logger.LogInformation("ファイルのアップロードが完了しました: {Path}", uploadPath);
+    }
+    catch (Exception ex)
+    {
+      _logger.LogError(ex, "ファイルアップロード中にエラーが発生しました: {Path}", uploadPath);
+      throw; // 上位呼び出し元でリトライするために例外を再スロー
+    }
   }
 
   /// <summary>
