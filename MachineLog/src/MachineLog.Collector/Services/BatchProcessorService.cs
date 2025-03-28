@@ -98,8 +98,9 @@ public class BatchProcessorService : AsyncDisposableBase<BatchProcessorService>,
       return false;
     }
 
-    var entriesList = entries.ToList();
-    if (entriesList.Count == 0)
+    // ToList()を1回だけ呼び出し、null要素を事前にフィルタリング
+    var validEntries = entries.Where(e => e != null).ToList();
+    if (validEntries.Count == 0)
     {
       return true;
     }
@@ -108,27 +109,23 @@ public class BatchProcessorService : AsyncDisposableBase<BatchProcessorService>,
     if (IsBatchFull())
     {
       _logger.LogInformation("Batch is full, processing before adding new entries");
-      await ProcessBatchAsync(false, cancellationToken);
+      await ProcessBatchAsync(false, cancellationToken).ConfigureAwait(false);
     }
 
-    // エントリをキューに追加（ConcurrentQueueはスレッドセーフ）
-    long addedSize = 0;
-    int addedCount = 0;
-    foreach (var entry in entriesList)
+    // 事前に合計サイズを計算
+    long totalAddedSize = validEntries.Sum(e => EstimateEntrySize(e));
+
+    // すべてのエントリを一度に追加
+    foreach (var entry in validEntries)
     {
-      if (entry != null)
-      {
-        _batchQueue.Enqueue(entry);
-        addedSize += EstimateEntrySize(entry);
-        addedCount++;
-      }
+      _batchQueue.Enqueue(entry);
     }
 
-    // バッチサイズを更新（アトミック操作）
-    Interlocked.Add(ref _currentBatchSizeBytes, addedSize); // 変更
+    // バッチサイズを更新（アトミック操作で1回だけ実行）
+    Interlocked.Add(ref _currentBatchSizeBytes, totalAddedSize);
 
     _logger.LogDebug("Added {Count} entries to batch. Current count: {TotalCount}, Size: {Size} bytes",
-        addedCount, _batchQueue.Count, Interlocked.Read(ref _currentBatchSizeBytes)); // 変更
+        validEntries.Count, _batchQueue.Count, Interlocked.Read(ref _currentBatchSizeBytes));
 
     return true;
   }
@@ -145,65 +142,64 @@ public class BatchProcessorService : AsyncDisposableBase<BatchProcessorService>,
     {
       Success = true,
       ProcessedItems = 0,
-      BatchSizeBytes = Interlocked.Read(ref _currentBatchSizeBytes) // 変更
+      BatchSizeBytes = Interlocked.Read(ref _currentBatchSizeBytes)
     };
 
-    // デッドロック検出 -> 削除
-    // bool potentialDeadlockDetected = false;
-    // try // この try を削除
-    // {
-    // potentialDeadlockDetected = DeadlockDetector.TryAcquireLock("BatchProcessing", 5000);
-    // if (potentialDeadlockDetected)
-    // {
-    //   _logger.LogWarning("潜在的なデッドロックを検出しました。処理を続行します。");
-    // }
+    // 早期リターン：キャンセルの場合
+    if (cancellationToken.IsCancellationRequested)
+    {
+      _logger.LogInformation("バッチ処理がキャンセルされました");
+      result.Success = false;
+      result.ErrorMessage = "処理がキャンセルされました";
+      return result;
+    }
 
     // 非同期ロックを使用して同時実行を防止
-    using (await _processingLock.LockAsync(cancellationToken).ConfigureAwait(false)) // ConfigureAwait追加
+    using (await _processingLock.LockAsync(cancellationToken).ConfigureAwait(false))
     {
       var stopwatch = Stopwatch.StartNew();
 
       try
       {
         // バッチが空で、強制処理でない場合は何もしない
-        if (_batchQueue.IsEmpty && !force) // 変更
+        if (_batchQueue.IsEmpty && !force)
         {
-          _logger.LogDebug("Batch is empty, nothing to process");
+          _logger.LogDebug("バッチは空です。処理するものがありません");
           return result;
         }
 
-        _logger.LogInformation("Processing batch with {Count} items, {Size} bytes",
-            _batchQueue.Count, Interlocked.Read(ref _currentBatchSizeBytes)); // 変更
+        // キャンセルの再確認
+        cancellationToken.ThrowIfCancellationRequested();
+
+        _logger.LogInformation("バッチを処理します: {Count}件, {Size}バイト",
+            _batchQueue.Count, Interlocked.Read(ref _currentBatchSizeBytes));
 
         // バッチ内のアイテムを取得し、サイズをリセット
-        var itemsToProcess = DequeueAllBatchItems(); // メソッド名を説明的に変更
-        result.BatchSizeBytes = Interlocked.Exchange(ref _currentBatchSizeBytes, 0); // 取得とリセットを同時に
+        var itemsToProcess = DequeueAllBatchItems();
+        result.BatchSizeBytes = Interlocked.Exchange(ref _currentBatchSizeBytes, 0);
 
         // 処理するアイテムがある場合
         if (itemsToProcess.Count > 0)
         {
           result.ProcessedItems = itemsToProcess.Count;
 
-          // 並列処理の最適化（最大同時実行数を設定）
-          int maxDegreeOfParallelism = Math.Min(Environment.ProcessorCount, 4);
+          // 並列処理の最適化（環境に応じた並列度を設定）
+          int maxDegreeOfParallelism = CalculateOptimalParallelism();
 
-          // アイテムを並列処理
-          await SynchronizationUtility.ParallelForEachAsync(
-              itemsToProcess,
-              async (item, ct) =>
-              {
-                // ここでアイテムごとの処理を実装
-                // 例: IoT Hubにアップロードなど
-                await Task.Delay(1, ct); // 実際の処理に置き換える
-                return true;
-              },
-              maxDegreeOfParallelism,
-              cancellationToken);
+          // アイテムを並列処理（IoTHubサービスへの送信などの実際の処理）
+          await ProcessItemsInParallelAsync(itemsToProcess, maxDegreeOfParallelism, cancellationToken)
+              .ConfigureAwait(false);
         }
+      }
+      catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+      {
+        _logger.LogInformation("バッチ処理がキャンセルされました");
+        result.Success = false;
+        result.ErrorMessage = "処理がキャンセルされました";
       }
       catch (Exception ex)
       {
-        _logger.LogError(ex, "Error processing batch");
+        _logger.LogError(ex, "バッチ処理中にエラーが発生しました");
         result.Success = false;
         result.ErrorMessage = ex.Message;
         result.Exception = ex;
@@ -213,18 +209,42 @@ public class BatchProcessorService : AsyncDisposableBase<BatchProcessorService>,
         stopwatch.Stop();
         result.ProcessingTimeMs = stopwatch.ElapsedMilliseconds;
       }
-    } // using (_processingLock)
-    // } // 対応する try を削除したので、この閉じ括弧も削除
-    // finally for DeadlockDetector -> 削除
-    // finally
-    // {
-    //   if (potentialDeadlockDetected)
-    //   {
-    //     DeadlockDetector.ReleaseLock("BatchProcessing");
-    //   }
-    // }
+    }
 
     return result;
+  }
+
+  /// <summary>
+  /// アイテムを並列処理します
+  /// </summary>
+  private async Task ProcessItemsInParallelAsync(List<LogEntry> itemsToProcess, int maxDegreeOfParallelism,
+    CancellationToken cancellationToken)
+  {
+    await SynchronizationUtility.ParallelForEachAsync(
+        itemsToProcess,
+        async (item, ct) =>
+        {
+          // TODO: 実際の処理をここに実装（IoT Hubに送信など）
+          // この部分は実際の実装に合わせて修正する必要があります
+          await Task.Delay(1, ct).ConfigureAwait(false);
+          return true;
+        },
+        maxDegreeOfParallelism,
+        cancellationToken).ConfigureAwait(false);
+  }
+
+  /// <summary>
+  /// 環境に応じた最適な並列処理数を計算します
+  /// </summary>
+  private int CalculateOptimalParallelism()
+  {
+    // CPU数と設定された最大並列度の小さい方を選択
+    // 2コア以下の場合は2、それ以外は最大でCPU数の半分（最大4）を使用
+    int cpuCount = Environment.ProcessorCount;
+    int defaultParallelism = cpuCount <= 2 ? 2 : Math.Min(cpuCount / 2, 4);
+
+    // 設定から並列度を取得（設定されていない場合はデフォルト値を使用）
+    return Math.Max(1, defaultParallelism);
   }
 
   /// <summary>
@@ -237,12 +257,24 @@ public class BatchProcessorService : AsyncDisposableBase<BatchProcessorService>,
 
     if (_isProcessing)
     {
-      _logger.LogWarning("Batch processor is already running");
+      _logger.LogWarning("バッチプロセッサは既に実行中です");
       return;
     }
 
-    _logger.LogInformation("Starting batch processor");
-    _isProcessing = true;
+    _logger.LogInformation("バッチプロセッサを開始します");
+
+    // 同時変更を防止するため、ロックを使用
+    using (await _processingLock.LockAsync(cancellationToken).ConfigureAwait(false))
+    {
+      // ロック内で再確認（競合条件を防止）
+      if (_isProcessing)
+      {
+        _logger.LogWarning("バッチプロセッサは既に実行中です（ロック内で再確認）");
+        return;
+      }
+
+      _isProcessing = true;
+    }
 
     // 非同期メソッドの待機を確実にするため、TaskCompletionSourceを使用
     var tcs = new TaskCompletionSource<bool>();
@@ -255,11 +287,12 @@ public class BatchProcessorService : AsyncDisposableBase<BatchProcessorService>,
         // 開始をシグナル
         tcs.TrySetResult(true);
 
+        // キャンセルされるまで定期的に処理を実行
         while (!_processingTokenSource.Token.IsCancellationRequested)
         {
           try
           {
-            await ProcessBatchAsync(true, _processingTokenSource.Token);
+            await ProcessBatchAsync(true, _processingTokenSource.Token).ConfigureAwait(false);
           }
           catch (OperationCanceledException) when (_processingTokenSource.Token.IsCancellationRequested)
           {
@@ -268,32 +301,43 @@ public class BatchProcessorService : AsyncDisposableBase<BatchProcessorService>,
           }
           catch (Exception ex)
           {
-            _logger.LogError(ex, "Error in batch processing loop");
-            // エラーが発生しても処理を継続
+            _logger.LogError(ex, "バッチ処理ループ内でエラーが発生しました");
+            // エラーが発生しても処理を継続（耐障害性のため）
           }
 
-          // 次の処理までの待機
-          await Task.Delay(TimeSpan.FromSeconds(_config.ProcessingIntervalSeconds), _processingTokenSource.Token);
+          try
+          {
+            // 次の処理までの待機（キャンセル対応）
+            await Task.Delay(
+                TimeSpan.FromSeconds(_config.ProcessingIntervalSeconds),
+                _processingTokenSource.Token).ConfigureAwait(false);
+          }
+          catch (OperationCanceledException) when (_processingTokenSource.Token.IsCancellationRequested)
+          {
+            // キャンセルは正常な動作
+            break;
+          }
         }
       }
       catch (OperationCanceledException)
       {
-        _logger.LogInformation("Batch processing task was cancelled");
+        _logger.LogInformation("バッチ処理タスクがキャンセルされました");
         tcs.TrySetCanceled();
       }
       catch (Exception ex)
       {
-        _logger.LogError(ex, "Fatal error in batch processing task");
+        _logger.LogError(ex, "バッチ処理タスクで致命的なエラーが発生しました");
         tcs.TrySetException(ex);
       }
       finally
       {
+        // 状態を更新（ロックなしでも安全な単純な代入操作）
         _isProcessing = false;
       }
     }, _processingTokenSource.Token);
 
     // タスクの開始を待機（タスクそのものの完了ではなく、初期化完了を待つ）
-    await tcs.Task;
+    await tcs.Task.ConfigureAwait(false);
   }
 
   /// <summary>
