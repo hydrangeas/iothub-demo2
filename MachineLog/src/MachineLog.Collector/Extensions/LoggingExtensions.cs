@@ -20,7 +20,8 @@ public static class LoggingExtensions
   {
     return builder.UseSerilog((context, services, loggerConfiguration) =>
     {
-      var appInsightsKey = context.Configuration["ApplicationInsights:InstrumentationKey"];
+      // Application Insights の接続文字列を取得
+      var appInsightsConnectionString = context.Configuration["ApplicationInsights:ConnectionString"];
       var isDevelopment = context.HostingEnvironment.IsDevelopment();
 
       loggerConfiguration
@@ -57,10 +58,10 @@ public static class LoggingExtensions
         outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}");
 
       // Application Insightsが設定されている場合は出力
-      if (!string.IsNullOrEmpty(appInsightsKey))
+      if (!string.IsNullOrEmpty(appInsightsConnectionString))
       {
         loggerConfiguration.WriteTo.ApplicationInsights(
-          appInsightsKey,
+          appInsightsConnectionString,
           new TraceTelemetryConverter(),
           restrictedToMinimumLevel: LogEventLevel.Information);
       }
