@@ -36,7 +36,7 @@ public class FileSystemHealthCheck : IHealthCheck
         {
             var data = new Dictionary<string, object>();
             var isHealthy = true;
-            var statusMessage = "ファイルシステムは正常です";
+            var errorMessages = new List<string>();
 
             // 監視対象ディレクトリの存在確認
             foreach (var path in _config.MonitoringPaths)
@@ -47,8 +47,11 @@ public class FileSystemHealthCheck : IHealthCheck
                 if (!exists)
                 {
                     isHealthy = false;
-                    statusMessage = $"監視対象ディレクトリが存在しません: {path}";
-                    _logger.LogWarning("監視対象ディレクトリが存在しません: {Path}", path);
+                    var msg = $"監視対象ディレクトリが存在しません: {path}";
+                    errorMessages.Add(msg);
+                    _logger.LogWarning(msg);
+                    // ディレクトリが存在しない場合、以降のチェックはスキップ
+                    continue;
                 }
                 else
                 {
@@ -58,11 +61,12 @@ public class FileSystemHealthCheck : IHealthCheck
                         var pathRoot = Path.GetPathRoot(path);
                         if (string.IsNullOrEmpty(pathRoot))
                         {
-                            _logger.LogWarning("有効なドライブパスが取得できません: {Path}", path);
                             isHealthy = false;
-                            statusMessage = $"有効なドライブパスが取得できません: {path}";
+                            var msg = $"有効なドライブパスが取得できません: {path}";
+                            errorMessages.Add(msg);
+                            _logger.LogWarning(msg);
                             data[$"Drive_{path}_Error"] = "有効なパスルートが取得できません";
-                            continue;
+                            continue; // このパスに対する以降のチェックはスキップ
                         }
 
                         var driveInfo = new DriveInfo(pathRoot);
@@ -73,15 +77,20 @@ public class FileSystemHealthCheck : IHealthCheck
                         if (freeSpaceGB < _config.FileSystemHealth.MinimumFreeDiskSpaceGB)
                         {
                             isHealthy = false;
-                            statusMessage = $"ディスク容量が不足しています: {driveInfo.Name} ({Math.Round(freeSpaceGB, 2)} GB)";
-                            _logger.LogWarning("ディスク容量が不足しています: {Drive} ({FreeSpace:0.00} GB)",
-                                driveInfo.Name, freeSpaceGB);
+                            var msg = $"ディスク容量が不足しています: {driveInfo.Name} ({Math.Round(freeSpaceGB, 2)} GB)";
+                            errorMessages.Add(msg);
+                            _logger.LogWarning(msg);
                         }
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, "ディスク容量の確認中にエラーが発生しました: {Path}", path);
-                        data[$"Drive_{Path.GetPathRoot(path)}_Error"] = ex.Message;
+                        isHealthy = false;
+                        var msg = $"ディスク容量の確認中にエラーが発生しました: {path}";
+                        errorMessages.Add($"{msg} - {ex.Message}");
+                        _logger.LogWarning(ex, msg);
+                        // pathRootが取得できない場合もあるため、nullチェックを追加
+                        var root = Path.GetPathRoot(path);
+                        data[$"Drive_{(root ?? path)}_Error"] = ex.Message;
                     }
 
                     // 書き込み権限の確認
@@ -95,8 +104,9 @@ public class FileSystemHealthCheck : IHealthCheck
                     catch (Exception ex)
                     {
                         isHealthy = false;
-                        statusMessage = $"ディレクトリに書き込み権限がありません: {path}";
-                        _logger.LogWarning(ex, "ディレクトリに書き込み権限がありません: {Path}", path);
+                        var msg = $"ディレクトリに書き込み権限がありません: {path}";
+                        errorMessages.Add($"{msg} - {ex.Message}");
+                        _logger.LogWarning(ex, msg);
                         data[$"Directory_{path}_Writable"] = false;
                         data[$"Directory_{path}_WriteError"] = ex.Message;
                     }
@@ -105,11 +115,13 @@ public class FileSystemHealthCheck : IHealthCheck
 
             if (isHealthy)
             {
-                return Task.FromResult(HealthCheckResult.Healthy(statusMessage, data));
+                return Task.FromResult(HealthCheckResult.Healthy("ファイルシステムは正常です", data));
             }
             else
             {
-                return Task.FromResult(HealthCheckResult.Degraded(statusMessage, null, data));
+                // 複数のエラーメッセージを結合
+                var combinedErrorMessage = string.Join("; ", errorMessages);
+                return Task.FromResult(HealthCheckResult.Degraded(combinedErrorMessage, null, data));
             }
         }
         catch (Exception ex)
