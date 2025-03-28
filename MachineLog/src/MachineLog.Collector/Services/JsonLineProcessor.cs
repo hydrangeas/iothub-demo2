@@ -227,7 +227,7 @@ public class JsonLineProcessor
           }
           else
           {
-            // 解析失敗時のログを追加 (オプション)
+            // 解析失敗時のログを追加 (オプション) - 引数の渡し方を修正
             _logger.LogWarning("ISO 8601 タイムスタンプの解析に失敗しました (行 {LineNumber}): {TimestampString}", lineNumber, timestampStr);
           }
         }

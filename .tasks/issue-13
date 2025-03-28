@@ -16,3 +16,4 @@
   - `JsonLineProcessor.cs` の `ProcessLineAsync` メソッドを変更し、バリデーション成功後に `System.Net.WebUtility.HtmlEncode` を使用して主要な文字列プロパティ (Id, DeviceId, Message, Category, Tags, Error.Message, Error.Code) を HTML エンコードするように修正。これにより基本的な XSS 対策を実装。
 - PR #43 レビューコメント対応
   - `JsonLineProcessor.cs` のタイムスタンプ解析処理を修正。`DateTime.TryParse` から `DateTime.TryParseExact` に変更し、ISO 8601 フォーマット ("o") を明示的に指定。
+  - `JsonLineProcessor.cs` のタイムスタンプ解析失敗時のログ出力 (`_logger.LogWarning`) の引数の渡し方を修正。
