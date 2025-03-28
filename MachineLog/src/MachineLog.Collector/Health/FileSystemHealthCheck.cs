@@ -37,13 +37,13 @@ public class FileSystemHealthCheck : IHealthCheck
             var data = new Dictionary<string, object>();
             var isHealthy = true;
             var statusMessage = "ファイルシステムは正常です";
-            
+
             // 監視対象ディレクトリの存在確認
             foreach (var path in _config.MonitoringPaths)
             {
                 var exists = Directory.Exists(path);
                 data[$"Directory_{path}_Exists"] = exists;
-                
+
                 if (!exists)
                 {
                     isHealthy = false;
@@ -58,13 +58,13 @@ public class FileSystemHealthCheck : IHealthCheck
                         var driveInfo = new DriveInfo(Path.GetPathRoot(path));
                         var freeSpaceGB = driveInfo.AvailableFreeSpace / (1024.0 * 1024.0 * 1024.0);
                         data[$"Drive_{driveInfo.Name}_FreeSpaceGB"] = Math.Round(freeSpaceGB, 2);
-                        
-                        // 空き容量が1GB未満の場合は警告
-                        if (freeSpaceGB < 1.0)
+
+                        // 空き容量が最小閾値未満の場合は警告
+                        if (freeSpaceGB < _config.FileSystemHealth.MinimumFreeDiskSpaceGB)
                         {
                             isHealthy = false;
                             statusMessage = $"ディスク容量が不足しています: {driveInfo.Name} ({Math.Round(freeSpaceGB, 2)} GB)";
-                            _logger.LogWarning("ディスク容量が不足しています: {Drive} ({FreeSpace:0.00} GB)", 
+                            _logger.LogWarning("ディスク容量が不足しています: {Drive} ({FreeSpace:0.00} GB)",
                                 driveInfo.Name, freeSpaceGB);
                         }
                     }
@@ -73,7 +73,7 @@ public class FileSystemHealthCheck : IHealthCheck
                         _logger.LogWarning(ex, "ディスク容量の確認中にエラーが発生しました: {Path}", path);
                         data[$"Drive_{Path.GetPathRoot(path)}_Error"] = ex.Message;
                     }
-                    
+
                     // 書き込み権限の確認
                     try
                     {
@@ -92,7 +92,7 @@ public class FileSystemHealthCheck : IHealthCheck
                     }
                 }
             }
-            
+
             if (isHealthy)
             {
                 return Task.FromResult(HealthCheckResult.Healthy(statusMessage, data));
