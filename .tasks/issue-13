@@ -14,3 +14,5 @@
   - `JsonLineProcessor.cs` を調査。`System.Text.Json` による JSON 形式検証と `FluentValidation` によるデータ整合性検証が行われていることを確認。
   - SQLインジェクションやXSSに特化したサニタイズは行われていなかった。
   - `JsonLineProcessor.cs` の `ProcessLineAsync` メソッドを変更し、バリデーション成功後に `System.Net.WebUtility.HtmlEncode` を使用して主要な文字列プロパティ (Id, DeviceId, Message, Category, Tags, Error.Message, Error.Code) を HTML エンコードするように修正。これにより基本的な XSS 対策を実装。
+- PR #43 レビューコメント対応
+  - `JsonLineProcessor.cs` のタイムスタンプ解析処理を修正。`DateTime.TryParse` から `DateTime.TryParseExact` に変更し、ISO 8601 フォーマット ("o") を明示的に指定。
