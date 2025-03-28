@@ -6,3 +6,11 @@
   - `Azure.Extensions.AspNetCore.Configuration.Secrets` と `Azure.Identity` NuGet パッケージを追加。
   - `appsettings.json` に `KeyVaultUri` を追加。
   - `Program.cs` を変更し、`KeyVaultUri` が設定されていれば `AddAzureKeyVault` と `DefaultAzureCredential` を使用して Key Vault から設定を読み込むように構成。
+- 通信の暗号化 (TLS 1.3)
+  - プロジェクトは `net8.0` をターゲットとしており、TLS 1.3 をサポート。
+  - `Microsoft.Azure.Devices.Client` SDK は、基盤となる OS と IoT Hub がサポートしていれば、自動的に TLS 1.3 をネゴシエートする。
+  - SDK レベルで特定の TLS バージョン (例: TLS 1.3 のみ) を強制する直接的な設定はないため、コード変更は不要と判断。OS とランタイムの機能に依存する。
+- データ保護 (入力サニタイズ)
+  - `JsonLineProcessor.cs` を調査。`System.Text.Json` による JSON 形式検証と `FluentValidation` によるデータ整合性検証が行われていることを確認。
+  - SQLインジェクションやXSSに特化したサニタイズは行われていなかった。
+  - `JsonLineProcessor.cs` の `ProcessLineAsync` メソッドを変更し、バリデーション成功後に `System.Net.WebUtility.HtmlEncode` を使用して主要な文字列プロパティ (Id, DeviceId, Message, Category, Tags, Error.Message, Error.Code) を HTML エンコードするように修正。これにより基本的な XSS 対策を実装。
