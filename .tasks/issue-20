@@ -9,3 +9,6 @@
 - `FileProcessorService` のベンチマーククラス `FileProcessorServiceBenchmarks` を作成。
 - ベンチマーク実行用の `Program.cs` を作成。
 - PR #46 のレビューコメントに基づき、不要な `UnitTest1.cs` を削除。
+- PR #48 で発生した `main` ブランチとのコンフリクトを解消 (`.tasks/issue-20` の変更を保持)。
+- PR #48 のマージ後、ローカルおよびリモートの `feature/issue-20-performance-test` ブランチを削除。
+- Issue #20 をクローズ。
