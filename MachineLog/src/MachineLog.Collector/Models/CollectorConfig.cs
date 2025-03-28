@@ -46,6 +46,11 @@ public class CollectorConfig
   /// ファイル保持ポリシー
   /// </summary>
   public RetentionPolicy RetentionPolicy { get; set; } = new();
+
+  /// <summary>
+  /// ファイルシステムの健全性チェックに関する設定
+  /// </summary>
+  public FileSystemHealthConfig FileSystemHealth { get; set; } = new();
 }
 
 /// <summary>
@@ -77,4 +82,15 @@ public class RetentionPolicy
   /// 処理済みファイルを圧縮するかどうか
   /// </summary>
   public bool CompressProcessedFiles { get; set; } = true;
+}
+
+/// <summary>
+/// ファイルシステムの健全性チェックに関する設定
+/// </summary>
+public class FileSystemHealthConfig
+{
+  /// <summary>
+  /// 最小ディスク空き容量（GB）
+  /// </summary>
+  public double MinimumFreeDiskSpaceGB { get; set; } = 1.0;
 }

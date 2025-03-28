@@ -1,0 +1,11 @@
+# PR41の指摘対応
+
+## 変更内容
+
+1. FileSystemHealthCheck.csのディスク空き容量の閾値をハードコードから設定ファイルで設定可能に変更
+   - CollectorConfigにFileSystemHealthConfigクラスを追加
+   - FileSystemHealthConfigにMinimumFreeDiskSpaceGBプロパティを追加（デフォルト1.0GB）
+   - FileSystemHealthCheck.csで設定値を使用するように修正
+
+2. 一時ファイル名衝突リスクについての指摘事項については、現状の方法が現実的であることを認識
+

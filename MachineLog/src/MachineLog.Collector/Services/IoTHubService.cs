@@ -1,4 +1,5 @@
 using MachineLog.Collector.Models;
+using MachineLog.Collector.Utilities;
 using MachineLog.Common.Utilities;
 using Microsoft.Azure.Devices.Client;
 using Microsoft.Azure.Devices.Client.Exceptions;
@@ -38,7 +39,7 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
     _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
     _connectionState = ConnectionState.Disconnected;
 
-    // リトライポリシーの設定
+    // 標準的なリトライポリシーを作成
     _retryPolicy = Policy
         .Handle<IotHubException>()
         .Or<TimeoutException>()
@@ -50,7 +51,7 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
             (exception, timeSpan, retryCount, context) =>
             {
               _logger.LogWarning(exception,
-                  "IoT Hub操作中にエラーが発生しました。{RetryCount}回目のリトライを{RetryTimeSpan}秒後に実行します。",
+                  "IoT Hub操作中にエラーが発生しました。{RetryCount}回目のリトライを{RetryTimeSpan:0.00}秒後に実行します。",
                   retryCount, timeSpan.TotalSeconds);
             });
   }
@@ -102,10 +103,12 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
         // 接続状態変更ハンドラを設定
         _deviceClient.SetConnectionStatusChangesHandler(ConnectionStatusChangesHandler);
 
-        // 接続を開く
+        // 接続を開く（リトライポリシーを使用）
         await _retryPolicy.ExecuteAsync(async (ct) =>
-            await _deviceClient.OpenAsync(ct).ConfigureAwait(false),
-            cancellationToken).ConfigureAwait(false);
+        {
+            await _deviceClient.OpenAsync(ct).ConfigureAwait(false);
+            _logger.LogDebug("IoT Hub接続が確立されました: {DeviceId}", _config.DeviceId);
+        }, cancellationToken).ConfigureAwait(false);
 
         _connectionState = ConnectionState.Connected;
         result.Success = true;
@@ -113,7 +116,11 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
       }
       finally
       {
-        _connectionLock.Release();
+        // ロックを確実に解放
+        if (_connectionLock.CurrentCount == 0)
+        {
+            _connectionLock.Release();
+        }
       }
     }
     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -161,6 +168,7 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
         return;
       }
 
+      // 同時操作を防ぐためのロック
       await _connectionLock.WaitAsync(cancellationToken).ConfigureAwait(false);
 
       try
@@ -168,12 +176,15 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
         _logger.LogInformation("IoT Hubから切断します: {DeviceId}", _config.DeviceId);
         _connectionState = ConnectionState.Disconnecting;
 
-        // 接続を閉じる
+        // 接続を閉じる（リトライポリシーを使用）
         await _retryPolicy.ExecuteAsync(async (ct) =>
-            await _deviceClient.CloseAsync(ct).ConfigureAwait(false),
-            cancellationToken).ConfigureAwait(false);
+        {
+            await _deviceClient.CloseAsync(ct).ConfigureAwait(false);
+            _logger.LogDebug("IoT Hub接続が閉じられました: {DeviceId}", _config.DeviceId);
+        }, cancellationToken).ConfigureAwait(false);
 
-        _deviceClient.Dispose();
+        // デバイスクライアントを安全に解放
+        ResourceUtility.SafeDispose(_logger, _deviceClient, "IoT Hubクライアント");
         _deviceClient = null;
         _connectionState = ConnectionState.Disconnected;
 
@@ -181,7 +192,11 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
       }
       finally
       {
-        _connectionLock.Release();
+        // ロックを確実に解放
+        if (_connectionLock.CurrentCount == 0)
+        {
+            _connectionLock.Release();
+        }
       }
     }
     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -193,7 +208,7 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
     {
       _connectionState = ConnectionState.Error;
       _logger.LogError(ex, "IoT Hubからの切断中にエラーが発生しました: {DeviceId}", _config.DeviceId);
-      throw;
+      // 例外を再スローせず、エラーをログに記録するだけにする
     }
   }
 
@@ -229,21 +244,29 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
       // ファイルの存在確認
       if (!File.Exists(filePath))
       {
-        throw new FileNotFoundException("アップロード対象のファイルが見つかりません", filePath);
+        var ex = new FileNotFoundException("アップロード対象のファイルが見つかりません", filePath);
+        _logger.LogError(ex, "ファイルが見つかりません: {FilePath}", filePath);
+        result.ErrorMessage = ex.Message;
+        result.Exception = ex;
+        return result;
       }
 
       // ファイルサイズを取得
       var fileInfo = new FileInfo(filePath);
       result.FileSizeBytes = fileInfo.Length;
 
-      // 接続状態を確認
+      // 接続状態を確認し、必要に応じて接続
       if (_deviceClient == null || _connectionState != ConnectionState.Connected)
       {
         _logger.LogWarning("ファイルアップロード前に接続が確立されていません。接続を試みます。");
         var connectionResult = await ConnectAsync(cancellationToken).ConfigureAwait(false);
         if (!connectionResult.Success)
         {
-          throw new InvalidOperationException("IoT Hubに接続できませんでした");
+          var ex = new InvalidOperationException("IoT Hubに接続できませんでした");
+          _logger.LogError(ex, "ファイルアップロード前の接続に失敗しました: {FilePath}", filePath);
+          result.ErrorMessage = ex.Message;
+          result.Exception = ex;
+          return result;
         }
       }
 
@@ -258,13 +281,16 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
       // ファイルをアップロード
       using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, true))
       {
+        // リトライポリシーを使用してアップロード
         await _retryPolicy.ExecuteAsync(async (ct) =>
-            await UploadFileToIoTHubAsync(fileStream, blobName, ct).ConfigureAwait(false),
-            cancellationToken).ConfigureAwait(false);
+        {
+            await UploadFileToIoTHubAsync(fileStream, blobName, ct).ConfigureAwait(false);
+            _logger.LogDebug("ファイルのアップロードが成功しました: {FilePath} -> {BlobName}", filePath, blobName);
+        }, cancellationToken).ConfigureAwait(false);
       }
 
       result.Success = true;
-      _logger.LogInformation("ファイルのアップロードが完了しました: {FilePath} -> {BlobName}, サイズ: {Size} バイト",
+      _logger.LogInformation("ファイルのアップロードが完了しました: {FilePath} -> {BlobName}, サイズ: {Size:N0} バイト",
           filePath, blobName, result.FileSizeBytes);
     }
     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -457,20 +483,17 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
   /// <returns>タスク</returns>
   private async Task HandleReconnectionAsync()
   {
-    try
+    // タイムアウト付きで再接続を試みる
+    var result = await ResourceUtility.ExecuteWithTimeoutAsync<IoTHubService, ConnectionResult>(
+        _logger,
+        "IoT Hub自動再接続",
+        async (ct) => await ConnectAsync(ct).ConfigureAwait(false),
+        30, // 30秒のタイムアウト
+        new ConnectionResult { Success = false, ErrorMessage = "再接続がタイムアウトしました" });
+
+    if (!result.Success)
     {
-      // 再接続のためのキャンセルトークンを作成（タイムアウト付き）
-      using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-      await ConnectAsync(cts.Token).ConfigureAwait(false);
-    }
-    catch (OperationCanceledException)
-    {
-      // タイムアウトは正常
-      _logger.LogWarning("自動再接続がタイムアウトしました");
-    }
-    catch (Exception ex)
-    {
-      _logger.LogError(ex, "自動再接続中にエラーが発生しました");
+      _logger.LogWarning("自動再接続に失敗しました: {ErrorMessage}", result.ErrorMessage);
     }
   }
 
@@ -487,33 +510,21 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
       {
         // デバイスクライアントを安全に解放
         // 注意: 同期的な処理のため、非同期操作はタイムアウト付きで実行
-        try
-        {
-          // 同期処理なため、5秒のタイムアウトを設定
-          using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-          var closeTask = _deviceClient.CloseAsync(cts.Token);
+        ResourceUtility.ExecuteWithTimeoutAsync(
+            _logger,
+            "IoT Hub接続の切断",
+            async (ct) => await _deviceClient.CloseAsync(ct).ConfigureAwait(false),
+            5) // 5秒のタイムアウト
+            .GetAwaiter()
+            .GetResult();
 
-          // GetAwaiter().GetResult()を使用して同期的に待機し、例外を適切に伝播
-          try
-          {
-            _deviceClient.CloseAsync(cts.Token).GetAwaiter().GetResult();
-          }
-          catch (OperationCanceledException)
-          {
-            _logger.LogWarning("IoT Hubクライアントの切断がタイムアウトしました");
-          }
-        }
-        catch (Exception ex)
-        {
-          _logger.LogWarning(ex, "IoT Hubクライアントの切断中にエラーが発生しました");
-        }
-
-        _deviceClient.Dispose();
+        // デバイスクライアントを安全に解放
+        ResourceUtility.SafeDispose(_logger, _deviceClient, "IoT Hubクライアント");
         _deviceClient = null;
       }
 
-      // 接続ロックを解放
-      _connectionLock.Dispose();
+      // 接続ロックを安全に解放
+      ResourceUtility.SafeDispose(_logger, _connectionLock, "接続ロック");
     }
     catch (Exception ex)
     {
@@ -548,26 +559,20 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
       // 接続を閉じる
       if (_deviceClient != null && _connectionState == ConnectionState.Connected)
       {
-        try
-        {
-          // 非同期で接続を閉じる
-          await _deviceClient.CloseAsync().ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-          _logger.LogWarning(ex, "IoT Hub接続の非同期切断中にエラーが発生しました");
-        }
+        // 非同期で接続を安全に閉じる
+        await ErrorHandlingUtility.SafeExecuteAsync(
+            _logger,
+            "IoT Hub接続の非同期切断",
+            async () => await _deviceClient.CloseAsync().ConfigureAwait(false),
+            LogLevel.Warning);
       }
 
-      // DeviceClientを破棄
-      if (_deviceClient != null)
-      {
-        _deviceClient.Dispose();
-        _deviceClient = null;
-      }
+      // DeviceClientを安全に解放
+      ResourceUtility.SafeDispose(_logger, _deviceClient, "IoT Hubクライアント");
+      _deviceClient = null;
 
-      // 接続ロックを解放
-      _connectionLock.Dispose();
+      // 接続ロックを安全に解放
+      ResourceUtility.SafeDispose(_logger, _connectionLock, "接続ロック");
     }
     catch (Exception ex)
     {

@@ -3,10 +3,13 @@ using FluentAssertions;
 using MachineLog.Collector.Models;
 using MachineLog.Collector.Services;
 using MachineLog.Collector.Tests.TestInfrastructure;
+using MachineLog.Collector.Utilities;
+using Microsoft.Azure.Devices.Client;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
 using System.Diagnostics;
+using System.Reflection;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -62,6 +65,52 @@ public class IoTHubServiceTests : UnitTestBase
     }
 
     base.Dispose();
+  }
+
+  [Fact]
+  [Trait("Category", TestCategories.Unit)]
+  public void ReleaseManagedResources_DisposesResourcesSafely()
+  {
+    // Arrange
+    var service = new IoTHubService(_loggerMock.Object, _optionsMock.Object);
+    
+    // Create a mock DeviceClient and set it via reflection
+    var deviceClientMock = new Mock<DeviceClient>();
+    deviceClientMock.Setup(x => x.CloseAsync(It.IsAny<CancellationToken>()))
+        .Returns(Task.CompletedTask);
+    
+    // Use reflection to set the private _deviceClient field
+    var deviceClientField = typeof(IoTHubService).GetField("_deviceClient", 
+        BindingFlags.NonPublic | BindingFlags.Instance);
+    deviceClientField?.SetValue(service, deviceClientMock.Object);
+    
+    // Set connection state via reflection
+    var connectionStateField = typeof(IoTHubService).GetField("_connectionState", 
+        BindingFlags.NonPublic | BindingFlags.Instance);
+    connectionStateField?.SetValue(service, ConnectionState.Connected);
+    
+    // Act
+    // Call the protected ReleaseManagedResources method via reflection
+    var method = typeof(IoTHubService).GetMethod("ReleaseManagedResources", 
+        BindingFlags.NonPublic | BindingFlags.Instance);
+    method?.Invoke(service, null);
+    
+    // Assert
+    deviceClientMock.Verify(x => x.Dispose(), Times.Once);
+    
+    // Verify the connection state was reset
+    var finalState = (ConnectionState)connectionStateField.GetValue(service);
+    finalState.Should().Be(ConnectionState.Disconnected);
+    
+    // Verify logging
+    _loggerMock.Verify(
+        x => x.Log(
+            LogLevel.Information,
+            It.IsAny<EventId>(),
+            It.Is<It.IsAnyType>((o, t) => o.ToString()!.Contains("リソースを解放")),
+            It.IsAny<Exception>(),
+            It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+        Times.Once);
   }
 
   [Fact]
@@ -122,17 +171,51 @@ public class IoTHubServiceTests : UnitTestBase
   public async Task DisconnectAsync_WhenConnected_DisconnectsSuccessfully()
   {
     // Arrange
-    var service = new Mock<IoTHubService>(_loggerMock.Object, _optionsMock.Object);
-
-    service.Setup(s => s.DisconnectAsync(It.IsAny<CancellationToken>()))
-        .Returns(Task.CompletedTask)
-        .Verifiable();
+    var service = new IoTHubService(_loggerMock.Object, _optionsMock.Object);
+    
+    // Create a mock DeviceClient and set it via reflection
+    var deviceClientMock = new Mock<DeviceClient>();
+    deviceClientMock.Setup(x => x.CloseAsync(It.IsAny<CancellationToken>()))
+        .Returns(Task.CompletedTask);
+    
+    // Use reflection to set the private fields
+    var deviceClientField = typeof(IoTHubService).GetField("_deviceClient", 
+        BindingFlags.NonPublic | BindingFlags.Instance);
+    deviceClientField?.SetValue(service, deviceClientMock.Object);
+    
+    var connectionStateField = typeof(IoTHubService).GetField("_connectionState", 
+        BindingFlags.NonPublic | BindingFlags.Instance);
+    connectionStateField?.SetValue(service, ConnectionState.Connected);
 
     // Act
-    await service.Object.DisconnectAsync();
+    await service.DisconnectAsync();
 
     // Assert
-    service.Verify(s => s.DisconnectAsync(It.IsAny<CancellationToken>()), Times.Once);
+    deviceClientMock.Verify(x => x.CloseAsync(It.IsAny<CancellationToken>()), Times.Once);
+    deviceClientMock.Verify(x => x.Dispose(), Times.Once);
+    
+    // Verify the connection state was reset
+    var finalState = (ConnectionState)connectionStateField.GetValue(service);
+    finalState.Should().Be(ConnectionState.Disconnected);
+    
+    // Verify logging
+    _loggerMock.Verify(
+        x => x.Log(
+            LogLevel.Information,
+            It.IsAny<EventId>(),
+            It.Is<It.IsAnyType>((o, t) => o.ToString()!.Contains("IoT Hubから切断します")),
+            It.IsAny<Exception>(),
+            It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+        Times.Once);
+    
+    _loggerMock.Verify(
+        x => x.Log(
+            LogLevel.Information,
+            It.IsAny<EventId>(),
+            It.Is<It.IsAnyType>((o, t) => o.ToString()!.Contains("IoT Hubから切断しました")),
+            It.IsAny<Exception>(),
+            It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+        Times.Once);
   }
 
   [Fact]
