@@ -116,6 +116,108 @@ cd out
 dotnet MachineLog.Collector.dll
 ```
 
+### クライアントアプリケーションの直接起動
+
+#### Windows
+
+```powershell
+# リリースビルド後の実行
+cd MachineLog/src/MachineLog.Collector/bin/Release/net6.0
+.\MachineLog.Collector.exe
+
+# または設定ファイルを指定して実行
+.\MachineLog.Collector.exe --configuration appsettings.production.json
+
+# バックグラウンドサービスとして登録
+sc create MachineLogCollector binPath="C:\path\to\MachineLog.Collector.exe"
+sc start MachineLogCollector
+
+# サービスの停止
+sc stop MachineLogCollector
+```
+
+#### Linux
+
+```bash
+# リリースビルド後の実行
+cd MachineLog/src/MachineLog.Collector/bin/Release/net6.0
+./MachineLog.Collector
+
+# 環境変数を設定して実行
+export IoTHubConfig__ConnectionString="your-connection-string"
+./MachineLog.Collector
+
+# systemdサービスとして登録 (/etc/systemd/system/machinelog-collector.service)
+# [Unit]
+# Description=MachineLog Collector Service
+# 
+# [Service]
+# WorkingDirectory=/opt/machinelog/collector
+# ExecStart=/opt/machinelog/collector/MachineLog.Collector
+# Restart=always
+# RestartSec=10
+# SyslogIdentifier=machinelog-collector
+# User=machinelog
+# Environment=ASPNETCORE_ENVIRONMENT=Production
+# 
+# [Install]
+# WantedBy=multi-user.target
+
+# サービスの開始
+sudo systemctl enable machinelog-collector
+sudo systemctl start machinelog-collector
+
+# サービスの状態確認
+sudo systemctl status machinelog-collector
+```
+
+#### macOS
+
+```bash
+# リリースビルド後の実行
+cd MachineLog/src/MachineLog.Collector/bin/Release/net6.0
+./MachineLog.Collector
+
+# launchdサービスとして登録 (~/Library/LaunchAgents/com.yourcompany.machinelog-collector.plist)
+# <?xml version="1.0" encoding="UTF-8"?>
+# <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+# <plist version="1.0">
+# <dict>
+#   <key>Label</key>
+#   <string>com.yourcompany.machinelog-collector</string>
+#   <key>ProgramArguments</key>
+#   <array>
+#     <string>/path/to/MachineLog.Collector</string>
+#   </array>
+#   <key>RunAtLoad</key>
+#   <true/>
+#   <key>KeepAlive</key>
+#   <true/>
+#   <key>StandardErrorPath</key>
+#   <string>/tmp/machinelog-collector.err</string>
+#   <key>StandardOutPath</key>
+#   <string>/tmp/machinelog-collector.out</string>
+# </dict>
+# </plist>
+
+# サービスの登録と開始
+launchctl load ~/Library/LaunchAgents/com.yourcompany.machinelog-collector.plist
+
+# サービスの停止
+launchctl unload ~/Library/LaunchAgents/com.yourcompany.machinelog-collector.plist
+```
+
+### コマンドラインオプション
+
+```
+-c, --configuration <FILE>    設定ファイルのパスを指定
+-e, --environment <NAME>      環境名を指定 (Development/Staging/Production)
+-d, --directory <PATH>        監視対象ディレクトリを追加 (複数指定可)
+-v, --verbose                 詳細なログ出力を有効化
+-q, --quiet                   ログ出力を最小限に抑制
+-h, --help                    ヘルプを表示
+```
+
 ### Docker での実行
 
 ```bash
