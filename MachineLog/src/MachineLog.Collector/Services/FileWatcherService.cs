@@ -17,10 +17,11 @@ public class FileWatcherService : AsyncDisposableBase<FileWatcherService>, IFile
   private readonly CollectorConfig _config;
   private readonly ConcurrentDictionary<string, DirectoryWatcherConfig> _directoryConfigs = new();
   private readonly ConcurrentDictionary<string, FileSystemWatcher> _watchers = new();
-  private readonly ConcurrentDictionary<string, DateTime> _processingFiles = new();
+  // private readonly ConcurrentDictionary<string, DateTime> _processingFiles = new(); // 削除
   private readonly ReaderWriterLockSlim _configLock = new ReaderWriterLockSlim(LockRecursionPolicy.SupportsRecursion);
-  private readonly AsyncLock _fileOperationLock = new AsyncLock();
-  private Timer? _stabilityCheckTimer;
+  // private readonly AsyncLock _fileOperationLock = new AsyncLock(); // 削除
+  // private Timer? _stabilityCheckTimer; // 削除
+  private readonly IFileStabilityChecker _fileStabilityChecker; // 追加
   private bool _isRunning;
 
   /// <summary>
@@ -43,12 +44,18 @@ public class FileWatcherService : AsyncDisposableBase<FileWatcherService>, IFile
   /// </summary>
   /// <param name="logger">ロガー</param>
   /// <param name="config">設定</param>
+  /// <param name="fileStabilityChecker">ファイル安定性チェッカー</param> // 追加
   public FileWatcherService(
       ILogger<FileWatcherService> logger,
-      IOptions<CollectorConfig> config) : base(true) // リソースマネージャーに登録
+      IOptions<CollectorConfig> config,
+      IFileStabilityChecker fileStabilityChecker) : base(true) // リソースマネージャーに登録
   {
     _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
+    _fileStabilityChecker = fileStabilityChecker ?? throw new ArgumentNullException(nameof(fileStabilityChecker)); // 追加
+
+    // ファイル安定化イベントを中継
+    _fileStabilityChecker.FileStabilized += OnFileStabilizedInternal; // 追加
 
     // 初期設定から監視ディレクトリを追加
     foreach (var path in _config.MonitoringPaths)
@@ -96,26 +103,7 @@ public class FileWatcherService : AsyncDisposableBase<FileWatcherService>, IFile
       // 各ディレクトリの監視を開始
       foreach (var configEntry in _directoryConfigs.Take(_config.MaxDirectories))
       {
-        var config = configEntry.Value;
-        if (!Directory.Exists(config.Path))
-        {
-          _logger.LogWarning("監視対象のディレクトリが存在しません: {Path}", config.Path);
-          continue;
-        }
-
-        var watcher = new FileSystemWatcher(config.Path)
-        {
-          Filter = config.FileFilter,
-          NotifyFilter = config.NotifyFilters,
-          IncludeSubdirectories = config.IncludeSubdirectories,
-          EnableRaisingEvents = true
-        };
-
-        watcher.Created += OnFileCreated;
-        watcher.Changed += OnFileChanged;
-
-        _watchers.TryAdd(configEntry.Key, watcher);
-        _logger.LogInformation("ディレクトリの監視を開始しました: {Path}, フィルター: {Filter}", config.Path, config.FileFilter);
+        StartWatchingDirectoryInternal(configEntry.Key, configEntry.Value);
       }
     }
     finally
@@ -123,8 +111,8 @@ public class FileWatcherService : AsyncDisposableBase<FileWatcherService>, IFile
       _configLock.ExitReadLock();
     }
 
-    // ファイル安定性チェック用のタイマーを開始
-    _stabilityCheckTimer = new Timer(CheckFileStability, null, 1000, 1000);
+    // ファイル安定性チェッカーを開始 (checkIntervalは仮に1000ms)
+    _ = _fileStabilityChecker.StartAsync(_config.StabilizationPeriodSeconds, 1000, cancellationToken); // 変更
     _isRunning = true;
 
     return Task.CompletedTask;
@@ -143,21 +131,19 @@ public class FileWatcherService : AsyncDisposableBase<FileWatcherService>, IFile
     _configLock.EnterWriteLock();
     try
     {
-      foreach (var watcherEntry in _watchers)
+      // すべてのウォッチャーを停止
+      foreach (var directoryId in _watchers.Keys.ToList()) // ToList() でコピーを作成
       {
-        var watcher = watcherEntry.Value;
-        watcher.EnableRaisingEvents = false;
-        watcher.Created -= OnFileCreated;
-        watcher.Changed -= OnFileChanged;
-        watcher.Dispose();
+        StopWatchingDirectoryInternal(directoryId);
       }
 
-      _watchers.Clear();
-      _processingFiles.Clear();
+      // _processingFiles.Clear(); // FileStabilityCheckerが管理
 
-      _stabilityCheckTimer?.Change(Timeout.Infinite, Timeout.Infinite);
-      _stabilityCheckTimer?.Dispose();
-      _stabilityCheckTimer = null;
+      // 安定性チェッカーを停止
+      _ = _fileStabilityChecker.StopAsync(cancellationToken); // 変更
+      // _stabilityCheckTimer?.Change(Timeout.Infinite, Timeout.Infinite); // 削除
+      // _stabilityCheckTimer?.Dispose(); // 削除
+      // _stabilityCheckTimer = null; // 削除
       _isRunning = false;
     }
     finally
@@ -232,25 +218,7 @@ public class FileWatcherService : AsyncDisposableBase<FileWatcherService>, IFile
         // サービスが実行中の場合は、新しいディレクトリの監視を開始
         if (_isRunning)
         {
-          if (!Directory.Exists(config.Path))
-          {
-            _logger.LogWarning("監視対象のディレクトリが存在しません: {Path}", config.Path);
-            return config.Id;
-          }
-
-          var watcher = new FileSystemWatcher(config.Path)
-          {
-            Filter = config.FileFilter,
-            NotifyFilter = config.NotifyFilters,
-            IncludeSubdirectories = config.IncludeSubdirectories,
-            EnableRaisingEvents = true
-          };
-
-          watcher.Created += OnFileCreated;
-          watcher.Changed += OnFileChanged;
-
-          _watchers.TryAdd(config.Id, watcher);
-          _logger.LogInformation("ディレクトリの監視を開始しました: {Path}, フィルター: {Filter}", config.Path, config.FileFilter);
+          StartWatchingDirectoryInternal(config.Id, config);
         }
       }
       finally
@@ -292,14 +260,7 @@ public class FileWatcherService : AsyncDisposableBase<FileWatcherService>, IFile
       }
 
       // ウォッチャーが存在する場合は停止して削除
-      if (_watchers.TryRemove(directoryId, out var watcher))
-      {
-        watcher.EnableRaisingEvents = false;
-        watcher.Created -= OnFileCreated;
-        watcher.Changed -= OnFileChanged;
-        watcher.Dispose();
-        _logger.LogInformation("ディレクトリの監視を停止しました: {DirectoryId}", directoryId);
-      }
+      StopWatchingDirectoryInternal(directoryId);
 
       return true;
     }
@@ -377,16 +338,14 @@ public class FileWatcherService : AsyncDisposableBase<FileWatcherService>, IFile
 
     _logger.LogDebug("ファイル作成イベントを検出しました: {FilePath}", e.FullPath);
 
-    // ファイル拡張子のフィルタリング
-    if (_config.FileExtensions.Count > 0 &&
-        !_config.FileExtensions.Contains(Path.GetExtension(e.FullPath).ToLowerInvariant()))
+    // 拡張子フィルタリング
+    if (!IsTargetFileExtension(e.FullPath))
     {
-      _logger.LogDebug("対象外のファイル拡張子のため無視します: {FilePath}", e.FullPath);
       return;
     }
 
-    // ファイルの最終更新時刻を記録（スレッドセーフな操作）
-    _processingFiles[e.FullPath] = DateTime.UtcNow;
+    // ファイル安定性チェッカーに追跡を依頼
+    _fileStabilityChecker.TrackFile(e.FullPath); // 変更
 
     // イベントを発火
     try
@@ -410,16 +369,14 @@ public class FileWatcherService : AsyncDisposableBase<FileWatcherService>, IFile
 
     _logger.LogDebug("ファイル変更イベントを検出しました: {FilePath}", e.FullPath);
 
-    // ファイル拡張子のフィルタリング
-    if (_config.FileExtensions.Count > 0 &&
-        !_config.FileExtensions.Contains(Path.GetExtension(e.FullPath).ToLowerInvariant()))
+    // 拡張子フィルタリング
+    if (!IsTargetFileExtension(e.FullPath))
     {
-      _logger.LogDebug("対象外のファイル拡張子のため無視します: {FilePath}", e.FullPath);
       return;
     }
 
-    // ファイルの最終更新時刻を更新（スレッドセーフな操作）
-    _processingFiles[e.FullPath] = DateTime.UtcNow;
+    // ファイル安定性チェッカーに追跡を依頼
+    _fileStabilityChecker.TrackFile(e.FullPath); // 変更
 
     // イベントを発火
     try
@@ -433,151 +390,121 @@ public class FileWatcherService : AsyncDisposableBase<FileWatcherService>, IFile
   }
 
   /// <summary>
-  /// ファイルの安定性をチェックするメソッド
+  /// FileStabilityCheckerからのファイル安定化イベントを中継します。
   /// </summary>
-  private void CheckFileStability(object? state)
+  private void OnFileStabilizedInternal(object? sender, FileSystemEventArgs e)
   {
     // オブジェクトが破棄済みの場合は処理をスキップ
     if (_disposed)
       return;
 
-    // 非同期メソッドを同期的に開始し、例外を適切に処理
-    _ = CheckFileStabilityInternalAsync(CancellationToken.None);
+    try
+    {
+      // FileWatcherServiceのFileStabilizedイベントを発火
+      FileStabilized?.Invoke(this, e);
+    }
+    catch (Exception ex)
+    {
+      _logger.LogError(ex, "ファイル安定化イベントの中継処理中にエラーが発生しました: {FilePath}", e.FullPath);
+    }
+  }
+
+  // CheckFileStability, CheckFileStabilityInternalAsync, IsFileAccessibleAsync は削除
+
+  /// <summary>
+  /// 指定されたファイルパスが監視対象の拡張子を持つかどうかを判断します。
+  /// </summary>
+  /// <param name="filePath">ファイルパス</param>
+  /// <returns>監視対象の場合は true、それ以外は false</returns>
+  private bool IsTargetFileExtension(string filePath)
+  {
+    if (_config.FileExtensions.Count == 0)
+    {
+      return true; // 拡張子フィルタリングが無効な場合は常に true
+    }
+
+    var extension = Path.GetExtension(filePath)?.ToLowerInvariant();
+    if (string.IsNullOrEmpty(extension) || !_config.FileExtensions.Contains(extension))
+    {
+      _logger.LogDebug("対象外のファイル拡張子のため無視します: {FilePath}", filePath);
+      return false;
+    }
+    return true;
   }
 
   /// <summary>
-  /// ファイルの安定性をチェックする内部実装
+  /// 指定されたディレクトリの監視を開始する内部メソッド。
   /// </summary>
-  private async Task CheckFileStabilityInternalAsync(CancellationToken cancellationToken)
+  /// <param name="directoryId">監視設定の識別子</param>
+  /// <param name="config">監視設定</param>
+  private void StartWatchingDirectoryInternal(string directoryId, DirectoryWatcherConfig config)
   {
+    if (!Directory.Exists(config.Path))
+    {
+      _logger.LogWarning("監視対象のディレクトリが存在しません: {Path}", config.Path);
+      return;
+    }
+
+    // 既に監視中の場合は何もしない
+    if (_watchers.ContainsKey(directoryId))
+    {
+      _logger.LogDebug("ディレクトリは既に監視中です: {Path}", config.Path);
+      return;
+    }
+
     try
     {
-      // 非同期ロックを使用して同時実行を防止
-      using (await _fileOperationLock.LockAsync(cancellationToken))
+      var watcher = new FileSystemWatcher(config.Path)
       {
-        try
-        {
-          var now = DateTime.UtcNow;
-          var stabilizationPeriod = TimeSpan.FromSeconds(_config.StabilizationPeriodSeconds);
-          var filesToRemove = new List<string>();
+        Filter = config.FileFilter,
+        NotifyFilter = config.NotifyFilters,
+        IncludeSubdirectories = config.IncludeSubdirectories,
+        EnableRaisingEvents = true
+      };
 
-          // 並列処理の最適化
-          var fileCheckTasks = new List<Task<(string FilePath, bool IsStable)>>();
+      watcher.Created += OnFileCreated;
+      watcher.Changed += OnFileChanged;
 
-          // 各ファイルの安定性を並列でチェック
-          foreach (var file in _processingFiles)
-          {
-            var lastModified = file.Value;
-            var timeSinceLastModification = now - lastModified;
-
-            if (timeSinceLastModification >= stabilizationPeriod)
-            {
-              var filePath = file.Key;
-              fileCheckTasks.Add(Task.Run(async () =>
-              {
-                try
-                {
-                  // ファイルが存在し、アクセス可能かチェック
-                  bool isStable = await IsFileAccessibleAsync(filePath);
-                  return (filePath, isStable);
-                }
-                catch (Exception ex)
-                {
-                  _logger.LogWarning(ex, "ファイルの安定性チェック中にエラーが発生しました: {FilePath}", filePath);
-                  return (filePath, false);
-                }
-              }));
-            }
-          }
-
-          // すべてのチェックが完了するのを待機
-          if (fileCheckTasks.Count > 0)
-          {
-            var results = await Task.WhenAll(fileCheckTasks);
-
-            // 安定したファイルを処理
-            foreach (var result in results)
-            {
-              if (result.IsStable)
-              {
-                _logger.LogDebug("ファイルが安定しました: {FilePath}", result.FilePath);
-
-                try
-                {
-                  // ファイル安定化イベントを発火
-                  FileStabilized?.Invoke(this, new FileSystemEventArgs(
-                      WatcherChangeTypes.Changed,
-                      Path.GetDirectoryName(result.FilePath) ?? string.Empty,
-                      Path.GetFileName(result.FilePath)));
-                }
-                catch (Exception ex)
-                {
-                  _logger.LogError(ex, "ファイル安定化イベントの処理中にエラーが発生しました: {FilePath}", result.FilePath);
-                }
-
-                filesToRemove.Add(result.FilePath);
-              }
-            }
-
-            // 処理済みのファイルをリストから削除
-            foreach (var file in filesToRemove)
-            {
-              _processingFiles.TryRemove(file, out _);
-            }
-          }
-        }
-        catch (Exception ex)
-        {
-          _logger.LogError(ex, "ファイル安定性チェック処理中に予期しないエラーが発生しました");
-        }
+      if (_watchers.TryAdd(directoryId, watcher))
+      {
+        _logger.LogInformation("ディレクトリの監視を開始しました: {Path}, フィルター: {Filter}", config.Path, config.FileFilter);
+      }
+      else
+      {
+        // 追加に失敗した場合（通常は発生しないはず）
+        watcher.Dispose();
+        _logger.LogWarning("FileSystemWatcherの追加に失敗しました: {DirectoryId}", directoryId);
       }
     }
     catch (Exception ex)
     {
-      // 外部例外をログに記録
-      _logger.LogError(ex, "ファイル安定性チェックの実行中に予期しないエラーが発生しました");
+      _logger.LogError(ex, "ディレクトリの監視開始中にエラーが発生しました: {Path}", config.Path);
     }
   }
 
   /// <summary>
-  /// ファイルがアクセス可能かどうかを非同期でチェックするメソッド
+  /// 指定されたディレクトリの監視を停止する内部メソッド。
   /// </summary>
-  private async Task<bool> IsFileAccessibleAsync(string filePath)
+  /// <param name="directoryId">監視設定の識別子</param>
+  private void StopWatchingDirectoryInternal(string directoryId)
   {
-    try
+    if (_watchers.TryRemove(directoryId, out var watcher))
     {
-      // ファイルが存在するかチェック
-      if (!File.Exists(filePath))
+      try
       {
-        return false;
+        watcher.EnableRaisingEvents = false;
+        watcher.Created -= OnFileCreated;
+        watcher.Changed -= OnFileChanged;
+        watcher.Dispose();
+        _logger.LogInformation("ディレクトリの監視を停止しました: {DirectoryId}", directoryId);
       }
-
-      // ファイルが読み取り可能かチェック（非同期版）
-      using var stream = new FileStream(
-          filePath,
-          FileMode.Open,
-          FileAccess.Read,
-          FileShare.ReadWrite,
-          4096,
-          FileOptions.Asynchronous);
-
-      // 実際に読み取りを試みる
-      var buffer = new byte[1];
-      await stream.ReadAsync(buffer, 0, 1);
-
-      return true;
-    }
-    catch (IOException)
-    {
-      // ファイルがロックされている場合
-      return false;
-    }
-    catch (Exception ex)
-    {
-      _logger.LogWarning(ex, "ファイルアクセスチェック中にエラーが発生しました: {FilePath}", filePath);
-      return false;
+      catch (Exception ex)
+      {
+        _logger.LogWarning(ex, "FileSystemWatcherの停止中にエラーが発生しました: {DirectoryId}", directoryId);
+      }
     }
   }
+
 
   /// <summary>
   /// リソースのサイズを推定します
@@ -598,40 +525,29 @@ public class FileWatcherService : AsyncDisposableBase<FileWatcherService>, IFile
 
     try
     {
-      // 監視中のファイルウォッチャーをすべて解放
-      foreach (var watcherEntry in _watchers)
+      // すべてのウォッチャーを停止して解放
+      foreach (var directoryId in _watchers.Keys.ToList()) // ToList() でコピーを作成
       {
-        try
-        {
-          var watcher = watcherEntry.Value;
-          watcher.EnableRaisingEvents = false;
-          watcher.Created -= OnFileCreated;
-          watcher.Changed -= OnFileChanged;
-          watcher.Dispose();
-        }
-        catch (Exception ex)
-        {
-          _logger.LogWarning(ex, "FileSystemWatcherの解放中にエラーが発生しました: {WatcherId}", watcherEntry.Key);
-        }
+        StopWatchingDirectoryInternal(directoryId);
       }
+      _watchers.Clear(); // StopWatchingDirectoryInternal で Remove されるが念のため
 
-      _watchers.Clear();
-
-      // タイマーの停止と解放
-      if (_stabilityCheckTimer != null)
-      {
-        _stabilityCheckTimer.Change(Timeout.Infinite, Timeout.Infinite);
-        _stabilityCheckTimer.Dispose();
-        _stabilityCheckTimer = null;
-      }
+      // タイマーの停止と解放 (FileStabilityCheckerが管理)
+      // if (_stabilityCheckTimer != null) ...
 
       // 内部コレクションのクリア
-      _processingFiles.Clear();
+      // _processingFiles.Clear(); // FileStabilityCheckerが管理
       _directoryConfigs.Clear();
 
       // ロックの解放
       _configLock.Dispose();
-      _fileOperationLock.Dispose();
+      // _fileOperationLock.Dispose(); // FileStabilityCheckerが管理
+
+      // イベントハンドラの解除
+      if (_fileStabilityChecker != null)
+      {
+        _fileStabilityChecker.FileStabilized -= OnFileStabilizedInternal;
+      }
     }
     catch (Exception ex)
     {
@@ -653,40 +569,29 @@ public class FileWatcherService : AsyncDisposableBase<FileWatcherService>, IFile
 
     try
     {
-      // 監視中のファイルウォッチャーをすべて解放
-      foreach (var watcherEntry in _watchers)
+      // すべてのウォッチャーを停止して解放
+      foreach (var directoryId in _watchers.Keys.ToList()) // ToList() でコピーを作成
       {
-        try
-        {
-          var watcher = watcherEntry.Value;
-          watcher.EnableRaisingEvents = false;
-          watcher.Created -= OnFileCreated;
-          watcher.Changed -= OnFileChanged;
-          watcher.Dispose();
-        }
-        catch (Exception ex)
-        {
-          _logger.LogWarning(ex, "FileSystemWatcherの非同期解放中にエラーが発生しました: {WatcherId}", watcherEntry.Key);
-        }
+        StopWatchingDirectoryInternal(directoryId);
       }
+      _watchers.Clear(); // StopWatchingDirectoryInternal で Remove されるが念のため
 
-      _watchers.Clear();
-
-      // タイマーの停止と解放
-      if (_stabilityCheckTimer != null)
-      {
-        _stabilityCheckTimer.Change(Timeout.Infinite, Timeout.Infinite);
-        _stabilityCheckTimer.Dispose();
-        _stabilityCheckTimer = null;
-      }
+      // タイマーの停止と解放 (FileStabilityCheckerが管理)
+      // if (_stabilityCheckTimer != null) ...
 
       // 内部コレクションのクリア
-      _processingFiles.Clear();
+      // _processingFiles.Clear(); // FileStabilityCheckerが管理
       _directoryConfigs.Clear();
 
       // ロックの解放
       _configLock.Dispose();
-      _fileOperationLock.Dispose();
+      // _fileOperationLock.Dispose(); // FileStabilityCheckerが管理
+
+      // イベントハンドラの解除
+      if (_fileStabilityChecker != null)
+      {
+        _fileStabilityChecker.FileStabilized -= OnFileStabilizedInternal;
+      }
     }
     catch (Exception ex)
     {

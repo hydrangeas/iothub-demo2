@@ -16,12 +16,14 @@ public class FileWatcherServiceTests : UnitTestBase
 {
   private readonly Mock<ILogger<FileWatcherService>> _loggerMock;
   private readonly Mock<IOptions<CollectorConfig>> _optionsMock;
+  private readonly Mock<IFileStabilityChecker> _stabilityCheckerMock; // 追加
   private readonly CollectorConfig _config;
   private readonly string _testDirectory;
 
   public FileWatcherServiceTests(ITestOutputHelper output) : base(output)
   {
     _loggerMock = new Mock<ILogger<FileWatcherService>>();
+    _stabilityCheckerMock = new Mock<IFileStabilityChecker>(); // 追加
     _config = new CollectorConfig
     {
       MonitoringPaths = new List<string>(),
@@ -62,7 +64,7 @@ public class FileWatcherServiceTests : UnitTestBase
   public async Task StartAsync_WithValidConfig_StartsWatching()
   {
     // Arrange
-    var service = new FileWatcherService(_loggerMock.Object, _optionsMock.Object);
+    var service = new FileWatcherService(_loggerMock.Object, _optionsMock.Object, _stabilityCheckerMock.Object); // 修正
 
     // Act
     await service.StartAsync(CancellationToken.None);
@@ -87,7 +89,7 @@ public class FileWatcherServiceTests : UnitTestBase
   public async Task StopAsync_AfterStarting_StopsWatching()
   {
     // Arrange
-    var service = new FileWatcherService(_loggerMock.Object, _optionsMock.Object);
+    var service = new FileWatcherService(_loggerMock.Object, _optionsMock.Object, _stabilityCheckerMock.Object); // 修正
     await service.StartAsync(CancellationToken.None);
 
     // Act
@@ -109,7 +111,7 @@ public class FileWatcherServiceTests : UnitTestBase
   public void AddWatchDirectory_WithValidPath_AddsDirectory()
   {
     // Arrange
-    var service = new FileWatcherService(_loggerMock.Object, _optionsMock.Object);
+    var service = new FileWatcherService(_loggerMock.Object, _optionsMock.Object, _stabilityCheckerMock.Object); // 修正
     var newDirectory = Path.Combine(Path.GetTempPath(), $"FileWatcherTest2_{Guid.NewGuid()}");
     Directory.CreateDirectory(newDirectory);
 
@@ -138,7 +140,7 @@ public class FileWatcherServiceTests : UnitTestBase
   public void RemoveWatchDirectory_WithValidId_RemovesDirectory()
   {
     // Arrange
-    var service = new FileWatcherService(_loggerMock.Object, _optionsMock.Object);
+    var service = new FileWatcherService(_loggerMock.Object, _optionsMock.Object, _stabilityCheckerMock.Object); // 修正
     var newDirectory = Path.Combine(Path.GetTempPath(), $"FileWatcherTest2_{Guid.NewGuid()}");
     Directory.CreateDirectory(newDirectory);
 

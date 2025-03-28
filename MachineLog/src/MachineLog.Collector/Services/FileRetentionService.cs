@@ -76,8 +76,8 @@ public class FileRetentionService : IFileRetentionService
 
       foreach (var file in processedFiles)
       {
-        var isLargeFile = file.Length <= largeFileThreshold;
-        var retentionDays = isLargeFile ? regularRetentionDays : largeFileRetentionDays;
+        var isLargeFile = file.Length >= largeFileThreshold;
+        var retentionDays = isLargeFile ? largeFileRetentionDays : regularRetentionDays;
         var fileAge = (now - file.LastWriteTime).TotalDays;
 
         if (fileAge > retentionDays)

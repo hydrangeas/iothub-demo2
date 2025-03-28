@@ -14,6 +14,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net.Sockets;
 using System.Text;
+using Azure.Storage.Blobs.Models; // BlobHttpHeadersのために追加
 
 namespace MachineLog.Collector.Services;
 
@@ -22,12 +23,22 @@ namespace MachineLog.Collector.Services;
 /// </summary>
 public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
 {
+  // 定数の定義
+  private const int DefaultIoTHubOperationTimeoutMinutes = 2;
+  private const int DefaultRetryCount = 5;
+  private const double DefaultInitialBackoffSeconds = 1.0;
+  private const int DisconnectTimeoutSeconds = 5;
+  private const int ReconnectTimeoutSeconds = 30;
+  private const string DefaultContentType = "application/octet-stream";
+  private const string JsonContentType = "application/json";
+  private const string PlainTextContentType = "text/plain";
+
   private readonly ILogger<IoTHubService> _logger;
   private readonly IoTHubConfig _config;
   private DeviceClient? _deviceClient;
   private ConnectionState _connectionState;
   private readonly SemaphoreSlim _connectionLock = new SemaphoreSlim(1, 1);
-  private readonly AsyncRetryPolicy _retryPolicy;
+  // private readonly AsyncRetryPolicy _retryPolicy; // 削除: RetryHandlerに統一
   private readonly StructuredLogger _structuredLogger;
   private readonly RetryHandler _retryHandler;
 
@@ -52,12 +63,8 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
     _structuredLogger = structuredLoggerFactory?.Invoke(logger) ?? throw new ArgumentNullException(nameof(structuredLoggerFactory));
     _retryHandler = retryHandlerFactory?.Invoke(logger) ?? throw new ArgumentNullException(nameof(retryHandlerFactory));
 
-    // IoT Hub操作用のリトライポリシーを作成
-    _retryPolicy = MachineLog.Common.Utilities.RetryPolicy.CreateIoTHubRetryPolicy(
-        logger,
-        "IoTHubOperation",
-        maxRetryCount: 5,
-        initialBackoffSeconds: 1.0);
+    // IoT Hub操作用のリトライポリシーを作成 -> RetryHandlerを使用するため削除
+    // _retryPolicy = MachineLog.Common.Utilities.RetryPolicy.CreateIoTHubRetryPolicy(...)
   }
 
   /// <summary>
@@ -107,12 +114,18 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
         // 接続状態変更ハンドラを設定
         _deviceClient.SetConnectionStatusChangesHandler(ConnectionStatusChangesHandler);
 
-        // 接続を開く（リトライポリシーを使用）
-        await _retryPolicy.ExecuteAsync(async (ct) =>
-        {
-          await _deviceClient.OpenAsync(ct).ConfigureAwait(false);
-          _logger.LogDebug("IoT Hub接続が確立されました: {DeviceId}", _config.DeviceId);
-        }, cancellationToken).ConfigureAwait(false);
+        // 接続を開く（RetryHandlerを使用）
+        var context = new Dictionary<string, object> { ["Operation"] = "OpenAsync" };
+        await _retryHandler.ExecuteWithRetryAsync(
+            $"IoTHubConnect_{_config.DeviceId}",
+            async (ct) =>
+            {
+              await _deviceClient.OpenAsync(ct).ConfigureAwait(false);
+              _logger.LogDebug("IoT Hub接続が確立されました: {DeviceId}", _config.DeviceId);
+            },
+            MachineLog.Common.Utilities.RetryPolicy.CreateIoTHubRetryPolicy(_logger, "IoTHubConnect", DefaultRetryCount, DefaultInitialBackoffSeconds), // ポリシーを都度生成
+            context,
+            cancellationToken).ConfigureAwait(false);
 
         _connectionState = ConnectionState.Connected;
         result.Success = true;
@@ -180,12 +193,18 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
         _logger.LogInformation("IoT Hubから切断します: {DeviceId}", _config.DeviceId);
         _connectionState = ConnectionState.Disconnecting;
 
-        // 接続を閉じる（リトライポリシーを使用）
-        await _retryPolicy.ExecuteAsync(async (ct) =>
-        {
-          await _deviceClient.CloseAsync(ct).ConfigureAwait(false);
-          _logger.LogDebug("IoT Hub接続が閉じられました: {DeviceId}", _config.DeviceId);
-        }, cancellationToken).ConfigureAwait(false);
+        // 接続を閉じる（RetryHandlerを使用）
+        var context = new Dictionary<string, object> { ["Operation"] = "CloseAsync" };
+        await _retryHandler.ExecuteWithRetryAsync(
+            $"IoTHubDisconnect_{_config.DeviceId}",
+            async (ct) =>
+            {
+              await _deviceClient.CloseAsync(ct).ConfigureAwait(false);
+              _logger.LogDebug("IoT Hub接続が閉じられました: {DeviceId}", _config.DeviceId);
+            },
+            MachineLog.Common.Utilities.RetryPolicy.CreateIoTHubRetryPolicy(_logger, "IoTHubDisconnect", DefaultRetryCount, DefaultInitialBackoffSeconds), // ポリシーを都度生成
+            context,
+            cancellationToken).ConfigureAwait(false);
 
         // デバイスクライアントを安全に解放
         ResourceUtility.SafeDispose(_logger, _deviceClient, "IoT Hubクライアント");
@@ -294,15 +313,17 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
         };
 
         await _retryHandler.ExecuteWithRetryAsync(
-          $"IoTHubUpload_{Path.GetFileName(filePath)}",
-          async (ct) =>
-          {
-            await UploadFileToIoTHubAsync(fileStream, blobName, ct).ConfigureAwait(false);
-            _logger.LogDebug("ファイルのアップロードが成功しました: {FilePath} -> {BlobName}", filePath, blobName);
-          },
-          _retryPolicy,
-          context,
-          cancellationToken).ConfigureAwait(false);
+            $"IoTHubUpload_{Path.GetFileName(filePath)}",
+            async (ct) =>
+            {
+              // ストリームの位置をリセット (リトライ時に必要)
+              if (fileStream.CanSeek) fileStream.Seek(0, SeekOrigin.Begin);
+              await UploadFileToIoTHubAsync(fileStream, blobName, ct).ConfigureAwait(false);
+              _logger.LogDebug("ファイルのアップロードが成功しました: {FilePath} -> {BlobName}", filePath, blobName);
+            },
+            MachineLog.Common.Utilities.RetryPolicy.CreateIoTHubRetryPolicy(_logger, "IoTHubUpload", DefaultRetryCount, DefaultInitialBackoffSeconds), // ポリシーを都度生成
+            context,
+            cancellationToken).ConfigureAwait(false);
       }
 
       result.Success = true;
@@ -381,8 +402,9 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
 
     // DeviceClientのオプション設定
     deviceClient.SetConnectionStatusChangesHandler(ConnectionStatusChangesHandler);
-    deviceClient.SetRetryPolicy(new ExponentialBackoff(5, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(1)));
-    deviceClient.OperationTimeoutInMilliseconds = (uint)TimeSpan.FromMinutes(2).TotalMilliseconds;
+    // SDK内部のリトライポリシーはシンプルに設定 (主要なリトライはRetryHandlerで行う)
+    deviceClient.SetRetryPolicy(new ExponentialBackoff(DefaultRetryCount, TimeSpan.FromSeconds(DefaultInitialBackoffSeconds), TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(1)));
+    deviceClient.OperationTimeoutInMilliseconds = (uint)TimeSpan.FromMinutes(DefaultIoTHubOperationTimeoutMinutes).TotalMilliseconds;
 
     // 非同期メソッドのため、ダミーのタスクを返す
     // ConfigureAwait(false)を使用して同期コンテキストを最適化
@@ -465,23 +487,17 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
       var blobClient = new Azure.Storage.Blobs.BlobClient(sasUriResponse.GetBlobUri());
 
       // コンテンツタイプの推定
-      string contentType = "application/octet-stream"; // デフォルト
-      if (Path.GetExtension(blobName).ToLower() == ".json" || Path.GetExtension(blobName).ToLower() == ".jsonl")
+      string contentType = Path.GetExtension(blobName).ToLowerInvariant() switch
       {
-        contentType = "application/json";
-      }
-      else if (Path.GetExtension(blobName).ToLower() == ".log" || Path.GetExtension(blobName).ToLower() == ".txt")
-      {
-        contentType = "text/plain";
-      }
+        ".json" or ".jsonl" => JsonContentType,
+        ".log" or ".txt" => PlainTextContentType,
+        _ => DefaultContentType
+      };
 
       // Azure Blob Storageにアップロード
-      var blobUploadOptions = new Azure.Storage.Blobs.Models.BlobUploadOptions
+      var blobUploadOptions = new BlobUploadOptions
       {
-        HttpHeaders = new Azure.Storage.Blobs.Models.BlobHttpHeaders
-        {
-          ContentType = contentType
-        }
+        HttpHeaders = new BlobHttpHeaders { ContentType = contentType }
       };
 
       await blobClient.UploadAsync(fileStream, blobUploadOptions, cancellationToken).ConfigureAwait(false);
@@ -553,7 +569,7 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
         _logger,
         "IoT Hub自動再接続",
         async (ct) => await ConnectAsync(ct).ConfigureAwait(false),
-        30, // 30秒のタイムアウト
+        ReconnectTimeoutSeconds, // 定数を使用
         new ConnectionResult { Success = false, ErrorMessage = "再接続がタイムアウトしました" });
 
     if (!result.Success)
@@ -571,22 +587,12 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
 
     try
     {
-      if (_deviceClient != null)
-      {
-        // デバイスクライアントを安全に解放
-        // 注意: 同期的な処理のため、非同期操作はタイムアウト付きで実行
-        ResourceUtility.ExecuteWithTimeoutAsync(
-            _logger,
-            "IoT Hub接続の切断",
-            async (ct) => await _deviceClient.CloseAsync(ct).ConfigureAwait(false),
-            5) // 5秒のタイムアウト
-            .GetAwaiter()
-            .GetResult();
+      // 同期Disposeでは非同期操作を待たない (非同期Disposeで処理)
+      // if (_deviceClient != null) { ... GetAwaiter().GetResult() ... } // 削除
 
-        // デバイスクライアントを安全に解放
-        ResourceUtility.SafeDispose(_logger, _deviceClient, "IoT Hubクライアント");
-        _deviceClient = null;
-      }
+      // デバイスクライアントを安全に解放 (Disposeのみ)
+      ResourceUtility.SafeDispose(_logger, _deviceClient, "IoT Hubクライアント");
+      _deviceClient = null;
 
       // 接続ロックを安全に解放
       ResourceUtility.SafeDispose(_logger, _connectionLock, "接続ロック");

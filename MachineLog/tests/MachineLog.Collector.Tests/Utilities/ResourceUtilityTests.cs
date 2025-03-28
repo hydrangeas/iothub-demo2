@@ -161,10 +161,21 @@ public class ResourceUtilityTests : UnitTestBase
     public async Task ExecuteWithTimeoutAsync_WhenTimedOut_ReturnsDefaultValue()
     {
         // Arrange
-        Func<CancellationToken, Task<int>> func = async (ct) => 
+        var manualResetEvent = new ManualResetEventSlim(false);
+
+        Func<CancellationToken, Task<int>> func = async (ct) =>
         {
-            await Task.Delay(1000, ct);
-            return 42;
+            try
+            {
+                // 完了しないタスクをシミュレート
+                await Task.Delay(TimeSpan.FromSeconds(30), ct);
+                return 42;
+            }
+            finally
+            {
+                // キャンセルされたことを確認するためにイベントを発行
+                manualResetEvent.Set();
+            }
         };
 
         // Act
@@ -172,7 +183,12 @@ public class ResourceUtilityTests : UnitTestBase
             _loggerMock.Object, "TestOperation", func, 1, -1);
 
         // Assert
+        // タイムアウトが正しく機能したことを確認
         result.Should().Be(-1);
+
+        // キャンセルが発行されたことを確認（最大5秒待機）
+        manualResetEvent.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
+
         _loggerMock.Verify(
             x => x.Log(
                 LogLevel.Warning,
@@ -181,6 +197,9 @@ public class ResourceUtilityTests : UnitTestBase
                 It.IsAny<Exception>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
             Times.Once);
+
+        // リソースのクリーンアップ
+        manualResetEvent.Dispose();
     }
 
     [Fact]
@@ -188,7 +207,7 @@ public class ResourceUtilityTests : UnitTestBase
     public async Task ExecuteWithTimeoutAsync_WhenExceptionThrown_ReturnsDefaultValue()
     {
         // Arrange
-        Func<CancellationToken, Task<int>> func = (ct) => 
+        Func<CancellationToken, Task<int>> func = (ct) =>
             Task.FromException<int>(new InvalidOperationException("Test exception"));
 
         // Act
