@@ -1,0 +1,9 @@
+# Issue 14: 非機能要件: パフォーマンス最適化
+
+## 2025/3/28 午後8:13
+
+- タスク開始
+- ブランチ `feature/issue-14-performance-optimization` を作成
+- JSONシリアライズ/デシリアライズの最適化に着手
+- `JsonLineProcessor.cs` をリファクタリングし、`System.Text.Json.Utf8JsonReader` を使用するように変更
+- コンパイラエラーを修正
