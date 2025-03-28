@@ -35,7 +35,7 @@ MachineLog.Collector/
 
 ## 実行の前提条件
 
-- .NET 6.0以上
+- .NET 8.0以上
 - Azure IoT Hubアカウント（ファイルアップロード機能が有効）
 - 適切な権限を持つIoT Hubデバイス登録
 - 監視対象ディレクトリへのアクセス権
@@ -122,7 +122,7 @@ dotnet MachineLog.Collector.dll
 
 ```powershell
 # リリースビルド後の実行
-cd MachineLog/src/MachineLog.Collector/bin/Release/net6.0
+cd MachineLog/src/MachineLog.Collector/bin/Release/net8.0
 .\MachineLog.Collector.exe
 
 # または設定ファイルを指定して実行
@@ -140,7 +140,7 @@ sc stop MachineLogCollector
 
 ```bash
 # リリースビルド後の実行
-cd MachineLog/src/MachineLog.Collector/bin/Release/net6.0
+cd MachineLog/src/MachineLog.Collector/bin/Release/net8.0
 ./MachineLog.Collector
 
 # 環境変数を設定して実行
@@ -175,7 +175,7 @@ sudo systemctl status machinelog-collector
 
 ```bash
 # リリースビルド後の実行
-cd MachineLog/src/MachineLog.Collector/bin/Release/net6.0
+cd MachineLog/src/MachineLog.Collector/bin/Release/net8.0
 ./MachineLog.Collector
 
 # launchdサービスとして登録 (~/Library/LaunchAgents/com.yourcompany.machinelog-collector.plist)
