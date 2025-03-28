@@ -1,0 +1,8 @@
+# Issue #13: 非機能要件: セキュリティ対策の実装
+
+## 2025-03-28
+
+- Azure Key Vault 連携の準備
+  - `Azure.Extensions.AspNetCore.Configuration.Secrets` と `Azure.Identity` NuGet パッケージを追加。
+  - `appsettings.json` に `KeyVaultUri` を追加。
+  - `Program.cs` を変更し、`KeyVaultUri` が設定されていれば `AddAzureKeyVault` と `DefaultAzureCredential` を使用して Key Vault から設定を読み込むように構成。

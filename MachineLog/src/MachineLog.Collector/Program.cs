@@ -3,8 +3,17 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using MachineLog.Collector.Extensions;
+using Azure.Identity; // Azure Key Vault 認証用に追加
+using Microsoft.Extensions.Configuration; // AddAzureKeyVault 用に追加
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Azure Key Vault の設定を追加
+var keyVaultUri = builder.Configuration["KeyVaultUri"];
+if (!string.IsNullOrEmpty(keyVaultUri) && Uri.TryCreate(keyVaultUri, UriKind.Absolute, out var validUri))
+{
+    builder.Configuration.AddAzureKeyVault(validUri, new DefaultAzureCredential());
+}
 
 // ログ設定
 builder.Host.UseCollectorLogging();
