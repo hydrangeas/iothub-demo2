@@ -45,6 +45,7 @@ public static class ServiceCollectionExtensions
     this IServiceCollection services)
   {
     // ファイル監視サービスの登録
+    services.AddSingleton<IFileStabilityChecker, FileStabilityChecker>(); // 追加
     services.AddSingleton<IFileWatcherService, FileWatcherService>();
 
     // ファイル処理関連サービスの登録

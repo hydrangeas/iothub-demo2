@@ -8,6 +8,8 @@
     <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
     <DockerfileContext>..\..</DockerfileContext>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo> <!-- 再度有効化: すべてのアセンブリ属性の自動生成を無効化 -->
+    <!-- <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute> --> <!-- 削除 -->
   </PropertyGroup>
 
   <ItemGroup>

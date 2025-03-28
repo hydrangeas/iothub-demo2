@@ -18,6 +18,7 @@
     <PackageReference Include="AutoFixture" Version="4.18.1" />
     <PackageReference Include="AutoFixture.AutoMoq" Version="4.18.1" />
     <PackageReference Include="AutoFixture.Xunit2" Version="4.18.1" />
+    <PackageReference Include="Microsoft.Azure.Devices.Client" Version="1.42.3" /> <!-- 再度追加 -->
   </ItemGroup>
 
   <ItemGroup>
