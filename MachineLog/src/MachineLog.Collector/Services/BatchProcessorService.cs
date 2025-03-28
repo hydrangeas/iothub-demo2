@@ -176,7 +176,7 @@ public class BatchProcessorService : AsyncDisposableBase<BatchProcessorService>,
             _batchQueue.Count, Interlocked.Read(ref _currentBatchSizeBytes)); // 変更
 
         // バッチ内のアイテムを取得し、サイズをリセット
-        var itemsToProcess = DequeueBatch(); // 変更: メソッド抽出
+        var itemsToProcess = DequeueAllBatchItems(); // メソッド名を説明的に変更
         result.BatchSizeBytes = Interlocked.Exchange(ref _currentBatchSizeBytes, 0); // 取得とリセットを同時に
 
         // 処理するアイテムがある場合
@@ -540,10 +540,10 @@ public class BatchProcessorService : AsyncDisposableBase<BatchProcessorService>,
   }
 
   /// <summary>
-  /// キューから現在のバッチを取得し、空にします。
+  /// キューから現在のバッチ内のすべてのアイテムを取得し、キューを空にします。
   /// </summary>
   /// <returns>処理対象のログエントリのリスト</returns>
-  private List<LogEntry> DequeueBatch()
+  private List<LogEntry> DequeueAllBatchItems()
   {
     var itemsToProcess = new List<LogEntry>();
     while (_batchQueue.TryDequeue(out var item))

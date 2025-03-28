@@ -317,7 +317,15 @@ public class IoTHubService : AsyncDisposableBase<IoTHubService>, IIoTHubService
             async (ct) =>
             {
               // ストリームの位置をリセット (リトライ時に必要)
-              if (fileStream.CanSeek) fileStream.Seek(0, SeekOrigin.Begin);
+              if (fileStream.CanSeek)
+              {
+                fileStream.Seek(0, SeekOrigin.Begin);
+              }
+              else
+              {
+                // シークできないストリームの場合は警告をログに記録
+                _logger.LogWarning("ストリームをシークできません。リトライ時に問題が発生する可能性があります: {FilePath}", filePath);
+              }
               await UploadFileToIoTHubAsync(fileStream, blobName, ct).ConfigureAwait(false);
               _logger.LogDebug("ファイルのアップロードが成功しました: {FilePath} -> {BlobName}", filePath, blobName);
             },

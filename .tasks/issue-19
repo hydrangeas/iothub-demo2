@@ -26,3 +26,10 @@
   - 大きなファイルと小さなファイルの保持期間ロジックを修正
   - エラーハンドリングの強化
   - コードの可読性向上
+
+## 2025/03/28 22:48
+
+- PR50のレビューコメントへの対応
+  - `FileRetentionService.cs`: 大きなファイル判定ロジックにコメントを追加し意図を明確化
+  - `IoTHubService.cs`: シークできないストリームの場合の処理を改善し警告をログに記録するよう修正
+  - `BatchProcessorService.cs`: メソッド名をより説明的に変更（`DequeueBatch` → `DequeueAllBatchItems`）

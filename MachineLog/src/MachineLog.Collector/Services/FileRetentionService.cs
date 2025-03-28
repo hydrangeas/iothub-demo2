@@ -76,7 +76,8 @@ public class FileRetentionService : IFileRetentionService
 
       foreach (var file in processedFiles)
       {
-        var isLargeFile = file.Length >= largeFileThreshold;
+        // ファイルサイズがしきい値以上の場合、大きなファイルとして扱う
+        var isLargeFile = file.Length >= largeFileThreshold; // >= を使用して、しきい値以上のファイルを「大きい」と判定
         var retentionDays = isLargeFile ? largeFileRetentionDays : regularRetentionDays;
         var fileAge = (now - file.LastWriteTime).TotalDays;
 
