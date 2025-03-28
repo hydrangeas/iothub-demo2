@@ -55,7 +55,17 @@ public class FileSystemHealthCheck : IHealthCheck
                     // ディスク容量の確認
                     try
                     {
-                        var driveInfo = new DriveInfo(Path.GetPathRoot(path));
+                        var pathRoot = Path.GetPathRoot(path);
+                        if (string.IsNullOrEmpty(pathRoot))
+                        {
+                            _logger.LogWarning("有効なドライブパスが取得できません: {Path}", path);
+                            isHealthy = false;
+                            statusMessage = $"有効なドライブパスが取得できません: {path}";
+                            data[$"Drive_{path}_Error"] = "有効なパスルートが取得できません";
+                            continue;
+                        }
+
+                        var driveInfo = new DriveInfo(pathRoot);
                         var freeSpaceGB = driveInfo.AvailableFreeSpace / (1024.0 * 1024.0 * 1024.0);
                         data[$"Drive_{driveInfo.Name}_FreeSpaceGB"] = Math.Round(freeSpaceGB, 2);
 
