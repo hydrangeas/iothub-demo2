@@ -54,6 +54,7 @@
 リモートリポジトリがGitHubである場合、プルリクエストに付されたコメントの確認は、下記を実行します。
 
 ```powershell
+gh pr view PULL_NUMBER --comments
 gh api -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" /repos/OWNER/REPO/pulls/PULL_NUMBER/comments
 ```
 

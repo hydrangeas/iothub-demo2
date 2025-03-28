@@ -10,6 +10,8 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Net; // WebUtility.HtmlEncode を使用するために追加
+using System.Globalization; // CultureInfo を使用するために追加
 
 namespace MachineLog.Collector.Services;
 
@@ -207,21 +209,26 @@ public class JsonLineProcessor
       }
 
       // メタデータを設定
-      entry.SourceFile = filePath;
+      entry.SourceFile = filePath; // SourceFile はエンコードしない (パス情報のため)
       entry.ProcessedAt = DateTime.UtcNow;
 
-      // ISO 8601形式の日付が正しく解析されなかった場合の修正処理
+      // ISO 8601形式の日付が正しく解析されなかった場合の修正処理 (TryParseExactを使用)
       if (entry.Timestamp == default)
       {
-        // 文字列からの日付解析を試みる
         if (jsonDocument.RootElement.TryGetProperty("timestamp", out var timestampElement) &&
             timestampElement.ValueKind == JsonValueKind.String)
         {
           var timestampStr = timestampElement.GetString();
+          // ISO 8601 "o" format specifier を使用
           if (!string.IsNullOrEmpty(timestampStr) &&
-              DateTime.TryParse(timestampStr, out var parsedDate))
+              DateTime.TryParseExact(timestampStr, "o", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsedDate))
           {
             entry.Timestamp = parsedDate;
+          }
+          else
+          {
+            // 解析失敗時のログを追加 (オプション) - 引数の渡し方を修正
+            _logger.LogWarning("ISO 8601 タイムスタンプの解析に失敗しました (行 {LineNumber}): {TimestampString}", lineNumber, timestampStr);
           }
         }
       }
@@ -233,6 +240,29 @@ public class JsonLineProcessor
         var errors = string.Join(", ", validationResult.Errors.Select(e => e.ErrorMessage));
         _logger.LogWarning("バリデーションエラー（行 {LineNumber}）: {Errors}", lineNumber, errors);
         return null;
+      }
+
+      // バリデーション成功後、主要な文字列プロパティをHTMLエンコードする (XSS対策の基本層)
+      entry.Id = WebUtility.HtmlEncode(entry.Id);
+      entry.DeviceId = WebUtility.HtmlEncode(entry.DeviceId);
+      entry.Message = WebUtility.HtmlEncode(entry.Message);
+      if (entry.Category != null)
+      {
+        entry.Category = WebUtility.HtmlEncode(entry.Category);
+      }
+      if (entry.Tags != null)
+      {
+        entry.Tags = entry.Tags.Select(tag => WebUtility.HtmlEncode(tag)).ToList();
+      }
+      // entry.SourceFile はファイルパスなのでエンコードしない
+      if (entry.Error != null)
+      {
+        entry.Error.Message = WebUtility.HtmlEncode(entry.Error.Message);
+        if (entry.Error.Code != null)
+        {
+          entry.Error.Code = WebUtility.HtmlEncode(entry.Error.Code);
+        }
+        // StackTrace はエンコードしない方が可読性が高い場合があるため、ここでは除外
       }
 
       return entry;
