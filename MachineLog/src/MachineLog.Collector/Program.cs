@@ -24,6 +24,9 @@ builder.Services.AddCollectorConfiguration(builder.Configuration);
 // サービスの登録
 builder.Services.AddCollectorServices();
 
+// Application Insights のテレメトリ収集を有効にする
+builder.Services.AddApplicationInsightsTelemetryWorkerService();
+
 var app = builder.Build();
 
 app.UseRouting();

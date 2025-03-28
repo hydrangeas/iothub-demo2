@@ -1,0 +1,16 @@
+# Issue #15: 非機能要件: 監視とテレメトリの実装
+
+## 概要
+
+アプリケーション全体の監視とテレメトリ機能を実装し、運用性と可観測性を確保します。
+
+## 作業記録
+
+- 2025/03/28: 作業開始。ブランチ `feature/issue-15-monitoring-telemetry` を作成。
+- 2025/03/28: `MachineLog.Collector` プロジェクトに Application Insights を導入。
+    - `Microsoft.ApplicationInsights.AspNetCore` NuGet パッケージを追加。
+    - 依存関係の競合を解決 (`Microsoft.Extensions.Logging.ApplicationInsights` のバージョンを更新)。
+    - `Program.cs` に `AddApplicationInsightsTelemetryWorkerService()` を追加。
+    - `appsettings.json` の Application Insights 設定を `ConnectionString` に変更。
+    - `LoggingExtensions.cs` で Application Insights へのログ送信に `ConnectionString` を使用するように修正。
+    - 既存のヘルスチェック実装を確認。
