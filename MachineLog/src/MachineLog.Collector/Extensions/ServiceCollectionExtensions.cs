@@ -1,7 +1,10 @@
 using MachineLog.Collector.Models;
 using MachineLog.Collector.Services;
+using MachineLog.Common.Logging;
+using MachineLog.Common.Utilities;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MachineLog.Collector.Extensions;
 
@@ -61,6 +64,13 @@ public static class ServiceCollectionExtensions
 
     // バリデーターの登録
     services.AddTransient<FluentValidation.IValidator<MachineLog.Common.Models.LogEntry>, MachineLog.Common.Validation.LogEntryValidator>();
+
+    // エラーハンドリングとリトライ関連サービスの登録
+    services.AddSingleton<Func<ILogger, StructuredLogger>>(loggerFactory =>
+      logger => new StructuredLogger(logger));
+
+    services.AddSingleton<Func<ILogger, RetryHandler>>(loggerFactory =>
+      logger => new RetryHandler(logger));
 
     // ヘルスチェックの登録
     services.AddHealthChecks()

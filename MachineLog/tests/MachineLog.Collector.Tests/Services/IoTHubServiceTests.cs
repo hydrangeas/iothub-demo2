@@ -4,6 +4,8 @@ using MachineLog.Collector.Models;
 using MachineLog.Collector.Services;
 using MachineLog.Collector.Tests.TestInfrastructure;
 using MachineLog.Collector.Utilities;
+using MachineLog.Common.Logging;
+using MachineLog.Common.Utilities;
 using Microsoft.Azure.Devices.Client;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -19,12 +21,23 @@ public class IoTHubServiceTests : UnitTestBase
 {
   private readonly Mock<ILogger<IoTHubService>> _loggerMock;
   private readonly Mock<IOptions<IoTHubConfig>> _optionsMock;
+  private readonly Mock<Func<ILogger, StructuredLogger>> _structuredLoggerFactoryMock;
+  private readonly Mock<Func<ILogger, RetryHandler>> _retryHandlerFactoryMock;
   private readonly IoTHubConfig _config;
   private readonly string _testDirectory;
 
   public IoTHubServiceTests(ITestOutputHelper output) : base(output)
   {
     _loggerMock = new Mock<ILogger<IoTHubService>>();
+    _structuredLoggerFactoryMock = new Mock<Func<ILogger, StructuredLogger>>();
+    _retryHandlerFactoryMock = new Mock<Func<ILogger, RetryHandler>>();
+
+    // モックの動作を設定
+    var structuredLoggerMock = new Mock<StructuredLogger>(MockBehavior.Loose, _loggerMock.Object);
+    _structuredLoggerFactoryMock.Setup(f => f(It.IsAny<ILogger>())).Returns(structuredLoggerMock.Object);
+
+    var retryHandlerMock = new Mock<RetryHandler>(MockBehavior.Loose, _loggerMock.Object);
+    _retryHandlerFactoryMock.Setup(f => f(It.IsAny<ILogger>())).Returns(retryHandlerMock.Object);
 
     _config = new IoTHubConfig
     {
@@ -72,36 +85,36 @@ public class IoTHubServiceTests : UnitTestBase
   public void ReleaseManagedResources_DisposesResourcesSafely()
   {
     // Arrange
-    var service = new IoTHubService(_loggerMock.Object, _optionsMock.Object);
-    
+    var service = new IoTHubService(_loggerMock.Object, _optionsMock.Object, _structuredLoggerFactoryMock.Object, _retryHandlerFactoryMock.Object);
+
     // Create a mock DeviceClient and set it via reflection
     var deviceClientMock = new Mock<DeviceClient>();
     deviceClientMock.Setup(x => x.CloseAsync(It.IsAny<CancellationToken>()))
         .Returns(Task.CompletedTask);
-    
+
     // Use reflection to set the private _deviceClient field
-    var deviceClientField = typeof(IoTHubService).GetField("_deviceClient", 
+    var deviceClientField = typeof(IoTHubService).GetField("_deviceClient",
         BindingFlags.NonPublic | BindingFlags.Instance);
     deviceClientField?.SetValue(service, deviceClientMock.Object);
-    
+
     // Set connection state via reflection
-    var connectionStateField = typeof(IoTHubService).GetField("_connectionState", 
+    var connectionStateField = typeof(IoTHubService).GetField("_connectionState",
         BindingFlags.NonPublic | BindingFlags.Instance);
     connectionStateField?.SetValue(service, ConnectionState.Connected);
-    
+
     // Act
     // Call the protected ReleaseManagedResources method via reflection
-    var method = typeof(IoTHubService).GetMethod("ReleaseManagedResources", 
+    var method = typeof(IoTHubService).GetMethod("ReleaseManagedResources",
         BindingFlags.NonPublic | BindingFlags.Instance);
     method?.Invoke(service, null);
-    
+
     // Assert
     deviceClientMock.Verify(x => x.Dispose(), Times.Once);
-    
+
     // Verify the connection state was reset
     var finalState = (ConnectionState)connectionStateField.GetValue(service);
     finalState.Should().Be(ConnectionState.Disconnected);
-    
+
     // Verify logging
     _loggerMock.Verify(
         x => x.Log(
@@ -118,7 +131,7 @@ public class IoTHubServiceTests : UnitTestBase
   public async Task ConnectAsync_WithValidConfig_ConnectsSuccessfully()
   {
     // Arrange
-    var service = new Mock<IoTHubService>(_loggerMock.Object, _optionsMock.Object);
+    var service = new Mock<IoTHubService>(_loggerMock.Object, _optionsMock.Object, _structuredLoggerFactoryMock.Object, _retryHandlerFactoryMock.Object);
 
     service.Setup(s => s.ConnectAsync(It.IsAny<CancellationToken>()))
         .ReturnsAsync(new ConnectionResult
@@ -144,7 +157,7 @@ public class IoTHubServiceTests : UnitTestBase
   {
     // Arrange
     var exception = new Exception("Connection failed");
-    var service = new Mock<IoTHubService>(_loggerMock.Object, _optionsMock.Object);
+    var service = new Mock<IoTHubService>(_loggerMock.Object, _optionsMock.Object, _structuredLoggerFactoryMock.Object, _retryHandlerFactoryMock.Object);
 
     service.Setup(s => s.ConnectAsync(It.IsAny<CancellationToken>()))
         .ReturnsAsync(new ConnectionResult
@@ -171,19 +184,19 @@ public class IoTHubServiceTests : UnitTestBase
   public async Task DisconnectAsync_WhenConnected_DisconnectsSuccessfully()
   {
     // Arrange
-    var service = new IoTHubService(_loggerMock.Object, _optionsMock.Object);
-    
+    var service = new IoTHubService(_loggerMock.Object, _optionsMock.Object, _structuredLoggerFactoryMock.Object, _retryHandlerFactoryMock.Object);
+
     // Create a mock DeviceClient and set it via reflection
     var deviceClientMock = new Mock<DeviceClient>();
     deviceClientMock.Setup(x => x.CloseAsync(It.IsAny<CancellationToken>()))
         .Returns(Task.CompletedTask);
-    
+
     // Use reflection to set the private fields
-    var deviceClientField = typeof(IoTHubService).GetField("_deviceClient", 
+    var deviceClientField = typeof(IoTHubService).GetField("_deviceClient",
         BindingFlags.NonPublic | BindingFlags.Instance);
     deviceClientField?.SetValue(service, deviceClientMock.Object);
-    
-    var connectionStateField = typeof(IoTHubService).GetField("_connectionState", 
+
+    var connectionStateField = typeof(IoTHubService).GetField("_connectionState",
         BindingFlags.NonPublic | BindingFlags.Instance);
     connectionStateField?.SetValue(service, ConnectionState.Connected);
 
@@ -193,11 +206,11 @@ public class IoTHubServiceTests : UnitTestBase
     // Assert
     deviceClientMock.Verify(x => x.CloseAsync(It.IsAny<CancellationToken>()), Times.Once);
     deviceClientMock.Verify(x => x.Dispose(), Times.Once);
-    
+
     // Verify the connection state was reset
     var finalState = (ConnectionState)connectionStateField.GetValue(service);
     finalState.Should().Be(ConnectionState.Disconnected);
-    
+
     // Verify logging
     _loggerMock.Verify(
         x => x.Log(
@@ -207,7 +220,7 @@ public class IoTHubServiceTests : UnitTestBase
             It.IsAny<Exception>(),
             It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
         Times.Once);
-    
+
     _loggerMock.Verify(
         x => x.Log(
             LogLevel.Information,
@@ -223,7 +236,7 @@ public class IoTHubServiceTests : UnitTestBase
   public async Task UploadFileAsync_WithValidFile_UploadsSuccessfully()
   {
     // Arrange
-    var service = new Mock<IoTHubService>(_loggerMock.Object, _optionsMock.Object);
+    var service = new Mock<IoTHubService>(_loggerMock.Object, _optionsMock.Object, _structuredLoggerFactoryMock.Object, _retryHandlerFactoryMock.Object);
     var testFilePath = Path.Combine(_testDirectory, "test.txt");
     File.WriteAllText(testFilePath, "Test content");
     var blobName = "test/test.txt";
@@ -257,7 +270,7 @@ public class IoTHubServiceTests : UnitTestBase
   public async Task UploadFileAsync_WithNonExistentFile_ReturnsFailureResult()
   {
     // Arrange
-    var service = new Mock<IoTHubService>(_loggerMock.Object, _optionsMock.Object);
+    var service = new Mock<IoTHubService>(_loggerMock.Object, _optionsMock.Object, _structuredLoggerFactoryMock.Object, _retryHandlerFactoryMock.Object);
     var nonExistentFilePath = Path.Combine(_testDirectory, "nonexistent.txt");
     var blobName = "test/nonexistent.txt";
 
@@ -288,7 +301,7 @@ public class IoTHubServiceTests : UnitTestBase
   public void GetConnectionState_ReturnsCurrentState()
   {
     // Arrange
-    var service = new Mock<IoTHubService>(_loggerMock.Object, _optionsMock.Object);
+    var service = new Mock<IoTHubService>(_loggerMock.Object, _optionsMock.Object, _structuredLoggerFactoryMock.Object, _retryHandlerFactoryMock.Object);
     service.Setup(s => s.GetConnectionState()).Returns(ConnectionState.Connected);
 
     // Act
@@ -303,7 +316,7 @@ public class IoTHubServiceTests : UnitTestBase
   public async Task UploadFileAsync_WithRetryLogic_EventuallySucceeds()
   {
     // Arrange
-    var service = new Mock<IoTHubService>(_loggerMock.Object, _optionsMock.Object);
+    var service = new Mock<IoTHubService>(_loggerMock.Object, _optionsMock.Object, _structuredLoggerFactoryMock.Object, _retryHandlerFactoryMock.Object);
     var testFilePath = Path.Combine(_testDirectory, "retry_test.txt");
     File.WriteAllText(testFilePath, "Test content for retry");
     var blobName = "test/retry_test.txt";
@@ -362,7 +375,7 @@ public class IoTHubServiceTests : UnitTestBase
   public async Task UploadFileAsync_WithLargeFile_HandlesChunkedUpload()
   {
     // Arrange
-    var service = new Mock<IoTHubService>(_loggerMock.Object, _optionsMock.Object);
+    var service = new Mock<IoTHubService>(_loggerMock.Object, _optionsMock.Object, _structuredLoggerFactoryMock.Object, _retryHandlerFactoryMock.Object);
     var largeFilePath = Path.Combine(_testDirectory, "large_file.bin");
 
     // 大きなファイルを作成（実際には小さいファイルを使用）
